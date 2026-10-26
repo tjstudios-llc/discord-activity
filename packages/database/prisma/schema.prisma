@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TeamRole {
+  OWNER
+  ADMIN
+  EDITOR
+  MEMBER
+  VIEWER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+model User {
+  id            String                @id @default(cuid())
+  discordId     String                @unique
+  username      String
+  displayName   String?
+  avatar        String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  memberships   TeamMember[]
+  preferences   WorkspacePreference[]
+  createdTasks  Task[]                @relation("TaskCreator")
+  assignedTasks Task[]                @relation("TaskAssignee")
+  notes         Note[]
+  auditEvents   AuditEvent[]
+}
+
+model Team {
+  id             String       @id @default(cuid())
+  name           String
+  slug           String       @unique
+  discordGuildId String?      @unique
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  members        TeamMember[]
+  workspaces     Workspace[]
+  auditEvents    AuditEvent[]
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  role      TeamRole @default(MEMBER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId, role])
+}
+
+model Workspace {
+  id          String                @id @default(cuid())
+  teamId      String
+  name        String
+  slug        String
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  team        Team                  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  theme       WorkspaceTheme?
+  layout      WorkspaceLayout?
+  features    WorkspaceFeature[]
+  preferences WorkspacePreference[]
+  tasks       Task[]
+  notes       Note[]
+
+  @@unique([teamId, slug])
+  @@index([teamId])
+}
+
+model WorkspaceTheme {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  version     Int       @default(1)
+  config      Json
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model WorkspaceLayout {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  version     Int       @default(1)
+  config      Json
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model WorkspaceFeature {
+  id          String    @id @default(cuid())
+  workspaceId String
+  key         String
+  enabled     Boolean   @default(true)
+  config      Json?
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, key])
+}
+
+model WorkspacePreference {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  config      Json
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+}
+
+model Task {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  title        String
+  description  String?
+  status       TaskStatus @default(TODO)
+  position     Int        @default(0)
+  createdById  String
+  assignedToId String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy    User       @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  assignedTo   User?      @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, position])
+  @@index([assignedToId])
+}
+
+model Note {
+  id          String    @id @default(cuid())
+  workspaceId String
+  authorId    String
+  title       String    @default("")
+  content     String    @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  author      User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, updatedAt])
+}
+
+model AuditEvent {
+  id           String   @id @default(cuid())
+  teamId       String
+  actorId      String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  team         Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  actor        User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([teamId, createdAt])
+  @@index([actorId, createdAt])
+}
