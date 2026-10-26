@@ -19,7 +19,8 @@
     "db:generate": "pnpm --filter @teamspace/database db:generate",
     "db:validate": "pnpm --filter @teamspace/database db:validate",
     "db:migrate": "pnpm --filter @teamspace/database db:migrate",
-    "dev:dashboard": "pnpm --filter @teamspace/dashboard dev"
+    "dev:dashboard": "pnpm --filter @teamspace/dashboard dev",
+    "db:deploy": "pnpm --filter @teamspace/database db:deploy"
   },
   "devDependencies": {
     "prettier": "^3.5.3",
