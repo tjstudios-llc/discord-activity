@@ -12,6 +12,7 @@ const env = z.object({
   ALLOWED_ORIGINS: z.string().default("http://localhost:5173"),
   DISCORD_CLIENT_ID: z.string().default(""),
   DISCORD_CLIENT_SECRET: z.string().default(""),
+  DISCORD_REDIRECT_URI: z.string().url().default("https://127.0.0.1"),
 }).parse(process.env);
 
 const allowedOrigins = new Set(env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean));
@@ -185,6 +186,7 @@ app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, time
         client_secret: env.DISCORD_CLIENT_SECRET,
         grant_type: "authorization_code",
         code: parsed.data.code,
+        redirect_uri: env.DISCORD_REDIRECT_URI,
       }),
       signal: AbortSignal.timeout(10_000),
     });
