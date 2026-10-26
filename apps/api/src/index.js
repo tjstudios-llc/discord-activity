@@ -61,6 +61,63 @@ function publicUser(user) {
   };
 }
 
+async function requireSession(request, reply) {
+  try {
+    const session = await readSession(request);
+    if (!session) {
+      reply.code(401).send({ error: "unauthorized", message: "A valid session is required." });
+      return null;
+    }
+    return session;
+  } catch (error) {
+    request.log.error({ err: error }, "Session lookup failed");
+    reply.code(503).send({ error: "session_unavailable", message: "Session verification is temporarily unavailable." });
+    return null;
+  }
+}
+
+async function getTeamMembership(userId, teamId) {
+  return prisma.teamMember.findUnique({
+    where: { teamId_userId: { teamId, userId } },
+    include: { team: true },
+  });
+}
+
+function slugify(value) {
+  return value.normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+}
+
+const teamCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  slug: z.string().trim().min(2).max(48).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+  workspaceName: z.string().trim().min(1).max(80).optional(),
+});
+const workspaceCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  slug: z.string().trim().min(2).max(48).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+});
+const idParamsSchema = z.object({ teamId: z.string().min(1) });
+const workspaceParamsSchema = z.object({ workspaceId: z.string().min(1) });
+
+async function createWorkspaceDefaults(tx, teamId, name, slug) {
+  return tx.workspace.create({
+    data: {
+      teamId,
+      name,
+      slug,
+      theme: { create: { config: { mode: "dark", accent: "#8ea7ff", background: "#080c18" } } },
+      layout: { create: { config: { version: 1, widgets: [{ type: "tasks", id: "tasks" }, { type: "notes", id: "notes" }] } } },
+      features: {
+        create: [
+          { key: "tasks", enabled: true, config: {} },
+          { key: "notes", enabled: true, config: {} },
+        ],
+      },
+    },
+  });
+}
+
 await app.register(helmet);
 await app.register(cors, {
   credentials: false,
@@ -201,6 +258,130 @@ app.post("/api/v1/auth/logout", async (request, reply) => {
     request.log.error({ err: error }, "Session logout failed");
     return reply.code(503).send({ error: "session_unavailable", message: "Could not end the session right now." });
   }
+});
+
+
+app.get("/api/v1/teams", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const memberships = await prisma.teamMember.findMany({
+    where: { userId: session.userId },
+    include: {
+      team: {
+        include: {
+          workspaces: { select: { id: true, name: true, slug: true, createdAt: true, updatedAt: true } },
+          _count: { select: { members: true, workspaces: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  return { teams: memberships.map(({ role, team }) => ({ ...team, role })) };
+});
+
+app.post("/api/v1/teams", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const parsed = teamCreateSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Team name or slug is invalid." });
+
+  const name = parsed.data.name;
+  const slug = parsed.data.slug ?? slugify(name);
+  if (!slug) return reply.code(400).send({ error: "invalid_request", message: "Choose a team name that can form a URL slug." });
+  const workspaceName = parsed.data.workspaceName ?? "Home";
+
+  try {
+    const team = await prisma.$transaction(async (tx) => {
+      const created = await tx.team.create({
+        data: {
+          name,
+          slug,
+          members: { create: { userId: session.userId, role: "OWNER" } },
+        },
+      });
+      const workspace = await createWorkspaceDefaults(tx, created.id, workspaceName, "home");
+      await tx.auditEvent.create({
+        data: { teamId: created.id, actorId: session.userId, action: "team.created", resourceType: "team", resourceId: created.id },
+      });
+      return { ...created, workspaces: [workspace], role: "OWNER" };
+    });
+    return reply.code(201).send({ team });
+  } catch (error) {
+    if (error?.code === "P2002") return reply.code(409).send({ error: "team_slug_conflict", message: "That team slug is already in use." });
+    throw error;
+  }
+});
+
+app.get("/api/v1/teams/:teamId", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const parsed = idParamsSchema.safeParse(request.params);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Team ID is invalid." });
+  const membership = await getTeamMembership(session.userId, parsed.data.teamId);
+  if (!membership) return reply.code(404).send({ error: "not_found", message: "Team not found." });
+  const team = await prisma.team.findUnique({
+    where: { id: membership.teamId },
+    include: {
+      workspaces: { include: { _count: { select: { tasks: true, notes: true } } }, orderBy: { createdAt: "asc" } },
+      _count: { select: { members: true } },
+    },
+  });
+  return { team: { ...team, role: membership.role } };
+});
+
+app.get("/api/v1/teams/:teamId/workspaces", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const parsed = idParamsSchema.safeParse(request.params);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Team ID is invalid." });
+  const membership = await getTeamMembership(session.userId, parsed.data.teamId);
+  if (!membership) return reply.code(404).send({ error: "not_found", message: "Team not found." });
+  const workspaces = await prisma.workspace.findMany({
+    where: { teamId: membership.teamId },
+    include: { _count: { select: { tasks: true, notes: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return { workspaces };
+});
+
+app.post("/api/v1/teams/:teamId/workspaces", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const params = idParamsSchema.safeParse(request.params);
+  const parsed = workspaceCreateSchema.safeParse(request.body);
+  if (!params.success || !parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Workspace details are invalid." });
+  const membership = await getTeamMembership(session.userId, params.data.teamId);
+  if (!membership) return reply.code(404).send({ error: "not_found", message: "Team not found." });
+  if (!["OWNER", "ADMIN"].includes(membership.role)) return reply.code(403).send({ error: "forbidden", message: "Only team owners and admins can create workspaces." });
+
+  const slug = parsed.data.slug ?? slugify(parsed.data.name);
+  if (!slug) return reply.code(400).send({ error: "invalid_request", message: "Choose a workspace name that can form a URL slug." });
+  try {
+    const workspace = await prisma.$transaction(async (tx) => {
+      const created = await createWorkspaceDefaults(tx, membership.teamId, parsed.data.name, slug);
+      await tx.auditEvent.create({
+        data: { teamId: membership.teamId, actorId: session.userId, action: "workspace.created", resourceType: "workspace", resourceId: created.id },
+      });
+      return created;
+    });
+    return reply.code(201).send({ workspace });
+  } catch (error) {
+    if (error?.code === "P2002") return reply.code(409).send({ error: "workspace_slug_conflict", message: "That workspace slug is already in use for this team." });
+    throw error;
+  }
+});
+
+app.get("/api/v1/workspaces/:workspaceId/config", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const parsed = workspaceParamsSchema.safeParse(request.params);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Workspace ID is invalid." });
+  const workspace = await prisma.workspace.findFirst({
+    where: { id: parsed.data.workspaceId, team: { members: { some: { userId: session.userId } } } },
+    include: { theme: true, layout: true, features: true },
+  });
+  if (!workspace) return reply.code(404).send({ error: "not_found", message: "Workspace not found." });
+  return { workspace };
 });
 
 app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: "not_found", message: "Route not found" }));
