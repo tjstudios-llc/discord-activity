@@ -1,1 +1,1 @@
-# discord-activity
+# TeamSpace Discord Activity
