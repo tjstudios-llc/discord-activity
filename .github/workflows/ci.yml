@@ -9,6 +9,20 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: teamspace
+          POSTGRES_PASSWORD: teamspace
+          POSTGRES_DB: teamspace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U teamspace -d teamspace"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       DATABASE_URL: postgresql://teamspace:teamspace@localhost:5432/teamspace?schema=public
     steps:
@@ -26,6 +40,8 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: Validate Prisma schema
         run: pnpm db:validate
+      - name: Apply database migrations
+        run: pnpm db:deploy
       - name: Typecheck
         run: pnpm typecheck
       - name: Lint
