@@ -249,17 +249,20 @@ function App() {
   async function signOut() {
     if (!session?.token || signingOut) return;
     setSigningOut(true);
+    let message = "Your TeamSpace session has been cleared from this Activity.";
     try {
       await apiRequest("/api/v1/auth/logout", { method: "POST", token: session.token });
     } catch (error) {
-      setTeamStatus(error instanceof Error ? `Signed out locally; server revocation failed: ${error.message}` : "Signed out locally; server revocation failed.");
+      message = error instanceof Error
+        ? `Signed out locally, but the server could not revoke the session: ${error.message}`
+        : "Signed out locally, but the server could not revoke the session.";
     } finally {
       setSession(null);
       setTeams([]);
       setTasks([]);
       setSelectedWorkspace(null);
       setActiveView("overview");
-      setAuth({ status: "signed-out", message: "Your TeamSpace session has been cleared from this Activity." });
+      setAuth({ status: "signed-out", message });
       setSigningOut(false);
     }
   }
