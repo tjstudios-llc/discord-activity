@@ -13,6 +13,11 @@ function App() {
   const [teamName, setTeamName] = useState("");
   const [teamStatus, setTeamStatus] = useState("");
   const [creatingTeam, setCreatingTeam] = useState(false);
+  const [selectedWorkspace, setSelectedWorkspace] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskStatus, setTaskStatus] = useState("");
+  const [creatingTask, setCreatingTask] = useState(false);
 
   useEffect(() => {
     if (started.current) return;
@@ -91,10 +96,89 @@ function App() {
       setTeams((current) => [...current, result.team]);
       setTeamName("");
       setTeamStatus("Team created and saved to PostgreSQL.");
+      const initialWorkspace = result.team.workspaces?.[0];
+      if (initialWorkspace) void openWorkspace(initialWorkspace, result.team.role, session.token);
     } catch (error) {
       setTeamStatus(error instanceof Error ? error.message : "Could not create team.");
     } finally {
       setCreatingTeam(false);
+    }
+  }
+
+  async function openWorkspace(workspace, role, token = session?.token) {
+    if (!token) return;
+    setSelectedWorkspace({ ...workspace, teamRole: role });
+    setTasks([]);
+    setTaskStatus("Loading tasks…");
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${workspace.id}/tasks`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || "Could not load tasks.");
+      setTasks(result.tasks ?? []);
+      setTaskStatus("");
+    } catch (error) {
+      setTaskStatus(error instanceof Error ? error.message : "Could not load tasks.");
+    }
+  }
+
+  async function createTask(event) {
+    event.preventDefault();
+    if (!session?.token || !selectedWorkspace || !taskTitle.trim()) return;
+    setCreatingTask(true);
+    setTaskStatus("");
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ title: taskTitle.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || "Could not create task.");
+      setTasks((current) => [...current, result.task].sort((a, b) => a.position - b.position));
+      setTaskTitle("");
+      setTaskStatus("Task saved to PostgreSQL.");
+    } catch (error) {
+      setTaskStatus(error instanceof Error ? error.message : "Could not create task.");
+    } finally {
+      setCreatingTask(false);
+    }
+  }
+
+  async function toggleTask(task) {
+    if (!session?.token || !selectedWorkspace) return;
+    setTaskStatus("");
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
+        body: JSON.stringify({ status: task.status === "DONE" ? "TODO" : "DONE" }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || "Could not update task.");
+      setTasks((current) => current.map((item) => item.id === task.id ? result.task : item));
+    } catch (error) {
+      setTaskStatus(error instanceof Error ? error.message : "Could not update task.");
+    }
+  }
+
+  async function deleteTask(task) {
+    if (!session?.token || !selectedWorkspace) return;
+    setTaskStatus("");
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks/${task.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || "Could not delete task.");
+      }
+      setTasks((current) => current.filter((item) => item.id !== task.id));
+      setTaskStatus("Task deleted.");
+    } catch (error) {
+      setTaskStatus(error instanceof Error ? error.message : "Could not delete task.");
     }
   }
 
@@ -148,7 +232,7 @@ function App() {
                   <div className="team-card-top"><span className="team-avatar">{team.name.slice(0, 1).toUpperCase()}</span><span className="role-chip">{team.role}</span></div>
                   <h4>{team.name}</h4><p className="team-slug">/{team.slug}</p>
                   <div className="workspace-list">
-                    {(team.workspaces ?? []).map((workspace) => <div className="workspace-row" key={workspace.id}><span className="workspace-icon">▦</span><span>{workspace.name}</span></div>)}
+                    {(team.workspaces ?? []).map((workspace) => <button type="button" className="workspace-row" key={workspace.id} onClick={() => openWorkspace(workspace, team.role, session.token)}><span className="workspace-icon">▦</span><span>{workspace.name}</span><span className="workspace-open">Open</span></button>)}
                   </div>
                 </article>
               ))}
@@ -157,6 +241,33 @@ function App() {
         </section>
       )}
 
+
+      {selectedWorkspace && session && (
+        <section className="tasks-panel" aria-labelledby="tasks-title">
+          <div className="teams-heading">
+            <div><p className="eyebrow">WORKSPACE</p><h3 id="tasks-title">{selectedWorkspace.name} tasks</h3></div>
+            <span className="team-count">{tasks.length} {tasks.length === 1 ? "task" : "tasks"}</span>
+          </div>
+          <form className="team-form" onSubmit={createTask}>
+            <label htmlFor="task-title">Add a task</label>
+            <div className="team-form-row">
+              <input id="task-title" value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={160} placeholder="What needs to get done?" required />
+              <button type="submit" disabled={creatingTask || !taskTitle.trim()}>{creatingTask ? "Saving…" : "Add task"}</button>
+            </div>
+          </form>
+          {taskStatus && <p className="team-status" role="status">{taskStatus}</p>}
+          <div className="task-list">
+            {tasks.map((task) => (
+              <article className={`task-row ${task.status === "DONE" ? "task-done" : ""}`} key={task.id}>
+                <button type="button" className="task-toggle" aria-label={task.status === "DONE" ? "Mark task incomplete" : "Mark task complete"} onClick={() => toggleTask(task)}>{task.status === "DONE" ? "✓" : "○"}</button>
+                <div className="task-copy"><h4>{task.title}</h4><p>{task.status.replaceAll("_", " ")}</p></div>
+                {["OWNER", "ADMIN", "EDITOR"].includes(selectedWorkspace.teamRole) && <button type="button" className="task-delete" aria-label={`Delete ${task.title}`} onClick={() => deleteTask(task)}>×</button>}
+              </article>
+            ))}
+            {tasks.length === 0 && !taskStatus && <p className="empty-teams">No tasks in this workspace yet.</p>}
+          </div>
+        </section>
+      )}
       <footer><span>TEAMSPACE</span><span>Early development · Do not use for production</span></footer>
     </main>
   );
