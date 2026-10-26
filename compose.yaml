@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-teamspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-teamspace}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-teamspace} -d ${POSTGRES_DB:-teamspace}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-teamspace}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-teamspace}?schema=public
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:4173}
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
+  realtime:
+    build:
+      context: .
+      dockerfile: apps/realtime/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      REALTIME_PORT: 2567
+    ports:
+      - "127.0.0.1:2567:2567"
+    networks: [backend]
+
+  activity:
+    build:
+      context: .
+      dockerfile: apps/activity/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4173:4173"
+    depends_on: [api]
+    networks: [backend]
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  postgres_data:
