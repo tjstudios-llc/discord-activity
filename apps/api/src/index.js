@@ -99,6 +99,21 @@ const workspaceCreateSchema = z.object({
 });
 const idParamsSchema = z.object({ teamId: z.string().min(1) });
 const workspaceParamsSchema = z.object({ workspaceId: z.string().min(1) });
+const taskParamsSchema = z.object({ workspaceId: z.string().min(1), taskId: z.string().min(1) });
+const taskCreateSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().max(5000).nullable().optional(),
+  assignedToId: z.string().min(1).nullable().optional(),
+  position: z.number().int().min(0).max(1_000_000).optional(),
+}).strict();
+const taskUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  description: z.string().max(5000).nullable().optional(),
+  status: z.enum(["TODO", "IN_PROGRESS", "DONE", "ARCHIVED"]).optional(),
+  assignedToId: z.string().min(1).nullable().optional(),
+  position: z.number().int().min(0).max(1_000_000).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
+
 
 async function createWorkspaceDefaults(tx, teamId, name, slug) {
   return tx.workspace.create({
@@ -382,6 +397,121 @@ app.get("/api/v1/workspaces/:workspaceId/config", async (request, reply) => {
   });
   if (!workspace) return reply.code(404).send({ error: "not_found", message: "Workspace not found." });
   return { workspace };
+});
+
+
+app.get("/api/v1/workspaces/:workspaceId/tasks", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const parsed = workspaceParamsSchema.safeParse(request.params);
+  if (!parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Workspace ID is invalid." });
+  const workspace = await prisma.workspace.findFirst({
+    where: { id: parsed.data.workspaceId, team: { members: { some: { userId: session.userId } } } },
+    select: { id: true },
+  });
+  if (!workspace) return reply.code(404).send({ error: "not_found", message: "Workspace not found." });
+  const tasks = await prisma.task.findMany({
+    where: { workspaceId: workspace.id },
+    include: {
+      createdBy: { select: { id: true, username: true, displayName: true } },
+      assignedTo: { select: { id: true, username: true, displayName: true } },
+    },
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+  });
+  return { tasks };
+});
+
+app.post("/api/v1/workspaces/:workspaceId/tasks", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const params = workspaceParamsSchema.safeParse(request.params);
+  const parsed = taskCreateSchema.safeParse(request.body);
+  if (!params.success || !parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Task details are invalid." });
+
+  const workspace = await prisma.workspace.findFirst({
+    where: { id: params.data.workspaceId, team: { members: { some: { userId: session.userId } } } },
+    select: { id: true, teamId: true },
+  });
+  if (!workspace) return reply.code(404).send({ error: "not_found", message: "Workspace not found." });
+  const membership = await getTeamMembership(session.userId, workspace.teamId);
+  if (!membership || membership.role === "VIEWER") return reply.code(403).send({ error: "forbidden", message: "Your role cannot create tasks." });
+
+  if (parsed.data.assignedToId) {
+    const assignee = await getTeamMembership(parsed.data.assignedToId, workspace.teamId);
+    if (!assignee) return reply.code(400).send({ error: "invalid_assignee", message: "The assignee must be a member of this team." });
+  }
+
+  const task = await prisma.$transaction(async (tx) => {
+    const created = await tx.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: parsed.data.title,
+        description: parsed.data.description ?? null,
+        assignedToId: parsed.data.assignedToId ?? null,
+        position: parsed.data.position ?? 0,
+        createdById: session.userId,
+      },
+    });
+    await tx.auditEvent.create({
+      data: { teamId: workspace.teamId, actorId: session.userId, action: "task.created", resourceType: "task", resourceId: created.id },
+    });
+    return created;
+  });
+  return reply.code(201).send({ task });
+});
+
+app.patch("/api/v1/workspaces/:workspaceId/tasks/:taskId", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const params = taskParamsSchema.safeParse(request.params);
+  const parsed = taskUpdateSchema.safeParse(request.body);
+  if (!params.success || !parsed.success) return reply.code(400).send({ error: "invalid_request", message: "Task update is invalid." });
+
+  const existing = await prisma.task.findFirst({
+    where: { id: params.data.taskId, workspaceId: params.data.workspaceId },
+    include: { workspace: { select: { teamId: true } } },
+  });
+  if (!existing) return reply.code(404).send({ error: "not_found", message: "Task not found." });
+  const membership = await getTeamMembership(session.userId, existing.workspace.teamId);
+  if (!membership) return reply.code(404).send({ error: "not_found", message: "Task not found." });
+  if (membership.role === "VIEWER") return reply.code(403).send({ error: "forbidden", message: "Your role cannot update tasks." });
+
+  if (typeof parsed.data.assignedToId === "string") {
+    const assignee = await getTeamMembership(parsed.data.assignedToId, existing.workspace.teamId);
+    if (!assignee) return reply.code(400).send({ error: "invalid_assignee", message: "The assignee must be a member of this team." });
+  }
+
+  const task = await prisma.$transaction(async (tx) => {
+    const updated = await tx.task.update({ where: { id: existing.id }, data: parsed.data });
+    await tx.auditEvent.create({
+      data: { teamId: existing.workspace.teamId, actorId: session.userId, action: "task.updated", resourceType: "task", resourceId: updated.id },
+    });
+    return updated;
+  });
+  return { task };
+});
+
+app.delete("/api/v1/workspaces/:workspaceId/tasks/:taskId", async (request, reply) => {
+  const session = await requireSession(request, reply);
+  if (!session) return;
+  const params = taskParamsSchema.safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "invalid_request", message: "Task ID is invalid." });
+  const existing = await prisma.task.findFirst({
+    where: { id: params.data.taskId, workspaceId: params.data.workspaceId },
+    include: { workspace: { select: { teamId: true } } },
+  });
+  if (!existing) return reply.code(404).send({ error: "not_found", message: "Task not found." });
+  const membership = await getTeamMembership(session.userId, existing.workspace.teamId);
+  if (!membership) return reply.code(404).send({ error: "not_found", message: "Task not found." });
+  if (!["OWNER", "ADMIN", "EDITOR"].includes(membership.role)) return reply.code(403).send({ error: "forbidden", message: "Your role cannot delete tasks." });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.task.delete({ where: { id: existing.id } });
+    await tx.auditEvent.create({
+      data: { teamId: existing.workspace.teamId, actorId: session.userId, action: "task.deleted", resourceType: "task", resourceId: existing.id },
+    });
+  });
+  return reply.code(204).send();
 });
 
 app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: "not_found", message: "Route not found" }));
