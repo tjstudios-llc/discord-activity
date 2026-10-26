@@ -94,7 +94,7 @@ app.get("/api/v1", async () => ({
   authentication: env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET ? "configured" : "not-configured",
 }));
 
-app.post("/api/v1/auth/discord/exchange", async (request, reply) => {
+app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
   const parsed = exchangeBodySchema.safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ error: "invalid_request", message: "A valid Discord authorization code is required." });
