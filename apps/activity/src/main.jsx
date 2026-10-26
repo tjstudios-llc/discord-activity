@@ -9,6 +9,10 @@ function App() {
   const started = useRef(false);
   const [auth, setAuth] = useState({ status: "starting", message: "Preparing Discord authorization…" });
   const [session, setSession] = useState(null);
+  const [teams, setTeams] = useState([]);
+  const [teamName, setTeamName] = useState("");
+  const [teamStatus, setTeamStatus] = useState("");
+  const [creatingTeam, setCreatingTeam] = useState(false);
 
   useEffect(() => {
     if (started.current) return;
@@ -37,12 +41,20 @@ function App() {
           body: JSON.stringify({ code: authorization.code }),
         });
         const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(result.message || `Authentication failed (${response.status}).`);
-        }
-        if (!cancelled) {
-          setSession(result);
-          setAuth({ status: "connected", message: "Discord identity verified by the TeamSpace API." });
+        if (!response.ok) throw new Error(result.message || `Authentication failed (${response.status}).`);
+        if (cancelled) return;
+
+        setSession(result);
+        setAuth({ status: "connected", message: "Discord identity verified by the TeamSpace API." });
+        try {
+          const teamsResponse = await fetch(`${apiOrigin}/api/v1/teams`, {
+            headers: { Authorization: `Bearer ${result.token}` },
+          });
+          const teamsPayload = await teamsResponse.json().catch(() => ({}));
+          if (!teamsResponse.ok) throw new Error(teamsPayload.message || "Could not load teams.");
+          if (!cancelled) setTeams(teamsPayload.teams ?? []);
+        } catch (error) {
+          if (!cancelled) setTeamStatus(error instanceof Error ? error.message : "Could not load teams.");
         }
       } catch (error) {
         if (!cancelled) {
@@ -59,6 +71,32 @@ function App() {
     void connectDiscord();
     return () => { cancelled = true; };
   }, [clientId, apiOrigin]);
+
+  async function createTeam(event) {
+    event.preventDefault();
+    if (!session?.token || !teamName.trim()) return;
+    setCreatingTeam(true);
+    setTeamStatus("");
+    try {
+      const response = await fetch(`${apiOrigin}/api/v1/teams`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({ name: teamName.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `Could not create team (${response.status}).`);
+      setTeams((current) => [...current, result.team]);
+      setTeamName("");
+      setTeamStatus("Team created and saved to PostgreSQL.");
+    } catch (error) {
+      setTeamStatus(error instanceof Error ? error.message : "Could not create team.");
+    } finally {
+      setCreatingTeam(false);
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -88,6 +126,36 @@ function App() {
           {session && <p className="config-line">Session expires: {new Date(session.expiresAt).toLocaleString()}</p>}
         </div>
       </section>
+
+      {session && (
+        <section className="teams-panel" aria-labelledby="teams-title">
+          <div className="teams-heading">
+            <div><p className="eyebrow">YOUR ORGANIZATION</p><h3 id="teams-title">Teams & workspaces</h3></div>
+            <span className="team-count">{teams.length} {teams.length === 1 ? "team" : "teams"}</span>
+          </div>
+          <form className="team-form" onSubmit={createTeam}>
+            <label htmlFor="team-name">Create a team</label>
+            <div className="team-form-row">
+              <input id="team-name" value={teamName} onChange={(event) => setTeamName(event.target.value)} maxLength={80} placeholder="e.g. Design team" required />
+              <button type="submit" disabled={creatingTeam || !teamName.trim()}>{creatingTeam ? "Creating…" : "Create team"}</button>
+            </div>
+          </form>
+          {teamStatus && <p className="team-status" role="status">{teamStatus}</p>}
+          {teams.length > 0 ? (
+            <div className="team-grid">
+              {teams.map((team) => (
+                <article className="team-card" key={team.id}>
+                  <div className="team-card-top"><span className="team-avatar">{team.name.slice(0, 1).toUpperCase()}</span><span className="role-chip">{team.role}</span></div>
+                  <h4>{team.name}</h4><p className="team-slug">/{team.slug}</p>
+                  <div className="workspace-list">
+                    {(team.workspaces ?? []).map((workspace) => <div className="workspace-row" key={workspace.id}><span className="workspace-icon">▦</span><span>{workspace.name}</span></div>)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : <p className="empty-teams">No teams yet. Create one to initialize your first workspace.</p>}
+        </section>
+      )}
 
       <footer><span>TEAMSPACE</span><span>Early development · Do not use for production</span></footer>
     </main>
