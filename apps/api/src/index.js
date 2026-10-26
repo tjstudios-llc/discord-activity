@@ -245,6 +245,7 @@ app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, time
 
   return reply.code(200).send({
     token,
+    access_token: discordAccessToken,
     expiresAt: expiresAt.toISOString(),
     user: publicUser(user),
   });
