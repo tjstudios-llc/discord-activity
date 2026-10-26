@@ -50,3 +50,19 @@ footer { margin-top: auto; padding-top: 48px; display: flex; justify-content: sp
 .workspace-icon { color: #91a8ff; }
 .empty-teams { margin: 18px 0 0; padding: 18px; border: 1px dashed #33415f; border-radius: 12px; color: #8797b7; text-align: center; font-size: 12px; line-height: 1.6; }
 @media (max-width: 540px) { .teams-panel { padding: 16px; } .team-form-row { flex-direction: column; } .team-form button { min-height: 40px; } .team-grid { grid-template-columns: 1fr; } }
+
+.workspace-row { width: 100%; border: 0; padding: 7px 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+.workspace-row:hover { color: #eef2ff; }
+.workspace-open { margin-left: auto; color: #7889b0; font-size: 9px; }
+.tasks-panel { margin-top: 18px; padding: 24px; border: 1px solid #27334d; border-radius: 20px; background: #0d1423e8; }
+.task-list { display: grid; gap: 8px; margin-top: 15px; }
+.task-row { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 12px; border: 1px solid #28344d; border-radius: 11px; background: #111a2b; }
+.task-toggle { flex: 0 0 28px; width: 28px; height: 28px; border: 1px solid #46577e; border-radius: 8px; background: #17223a; color: #9db1ff; font-size: 15px; cursor: pointer; }
+.task-copy { flex: 1; min-width: 0; }
+.task-copy h4 { margin: 0 0 5px; color: #dce5fa; font-size: 12px; overflow-wrap: anywhere; }
+.task-copy p { margin: 0; color: #7888a8; font-size: 9px; letter-spacing: .08em; }
+.task-done .task-copy h4 { color: #7d8aa3; text-decoration: line-through; }
+.task-done .task-toggle { border-color: #3c7d69; color: #79d8ad; background: #14352e; }
+.task-delete { width: 27px; height: 27px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #8290a9; font-size: 18px; cursor: pointer; }
+.task-delete:hover { border-color: #75414b; color: #ff9eac; background: #341d28; }
+@media (max-width: 540px) { .tasks-panel { padding: 16px; } }
