@@ -1,106 +1,191 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { DiscordSDK } from "@discord/embedded-app-sdk";
 import "./styles.css";
 
+const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || "").replace(/\/$/, "");
+const CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID;
+
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+function apiUrl(path) {
+  return `${API_ORIGIN}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+async function apiRequest(path, { token, ...options } = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let response;
+  try {
+    response = await fetch(apiUrl(path), { ...options, headers, cache: "no-store" });
+  } catch {
+    throw new Error("The TeamSpace API could not be reached. Check the Activity proxy and API service.");
+  }
+
+  if (response.status === 204) return null;
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.message || `Request failed with status ${response.status}.`;
+    throw new ApiError(message, response.status);
+  }
+  if (payload === null) throw new Error("The API returned an unreadable response.");
+  return payload;
+}
+
+function initials(value = "") {
+  return value.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() || "").join("") || "T";
+}
+
+function formatDate(value) {
+  if (!value) return "Recently";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Recently" : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
 function App() {
-  const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID;
-  const apiOrigin = (import.meta.env.VITE_API_ORIGIN || "").replace(/\/$/, "");
-  const started = useRef(false);
-  const [auth, setAuth] = useState({ status: "starting", message: "Preparing Discord authorization…" });
+  const [authAttempt, setAuthAttempt] = useState(0);
+  const [auth, setAuth] = useState({ status: "starting", message: "Preparing your secure Discord connection." });
   const [session, setSession] = useState(null);
   const [teams, setTeams] = useState([]);
-  const [teamName, setTeamName] = useState("");
-  const [teamStatus, setTeamStatus] = useState("");
-  const [creatingTeam, setCreatingTeam] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [activeView, setActiveView] = useState("overview");
+  const [teamName, setTeamName] = useState("");
   const [taskTitle, setTaskTitle] = useState("");
+  const [teamStatus, setTeamStatus] = useState("");
   const [taskStatus, setTaskStatus] = useState("");
+  const [creatingTeam, setCreatingTeam] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
+  const [loadingTeams, setLoadingTeams] = useState(false);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const loadTeams = useCallback(async (token) => {
+    setLoadingTeams(true);
+    try {
+      const result = await apiRequest("/api/v1/teams", { token });
+      setTeams(Array.isArray(result.teams) ? result.teams : []);
+      setTeamStatus("");
+    } catch (error) {
+      setTeamStatus(error instanceof Error ? error.message : "Could not load teams.");
+    } finally {
+      setLoadingTeams(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (started.current) return;
-    started.current = true;
     let cancelled = false;
+    let issuedSessionToken = null;
 
-    async function connectDiscord() {
-      if (!clientId) {
-        setAuth({ status: "configuration", message: "Set VITE_DISCORD_CLIENT_ID to your Discord application ID." });
+    async function connect() {
+      if (!CLIENT_ID) {
+        setAuth({ status: "configuration", message: "The Activity is missing VITE_DISCORD_CLIENT_ID. Configure the public Discord application ID and rebuild the frontend." });
         return;
       }
+
+      setAuth({ status: "starting", message: "Connecting to Discord's embedded Activity SDK…" });
       try {
-        const discordSdk = new DiscordSDK(clientId);
+        const discordSdk = new DiscordSDK(CLIENT_ID);
         await discordSdk.ready();
+        if (cancelled) return;
+
+        setAuth({ status: "authorizing", message: "Verifying your Discord identity securely…" });
         const authorization = await discordSdk.commands.authorize({
-          client_id: clientId,
+          client_id: CLIENT_ID,
           response_type: "code",
           state: "",
           prompt: "none",
           scope: ["identify"],
         });
+        if (!authorization?.code) throw new Error("Discord did not return an authorization code. Retry the connection from inside Discord.");
 
-        const response = await fetch(`${apiOrigin}/api/v1/auth/discord/exchange`, {
+        const exchange = await apiRequest("/api/v1/auth/discord/exchange", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code: authorization.code }),
         });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.message || `Authentication failed (${response.status}).`);
-        const { access_token: discordAccessToken, ...teamspaceSession } = result;
-        if (!discordAccessToken) throw new Error("The API did not return a Discord access token.");
+        const { access_token: discordAccessToken, ...teamspaceSession } = exchange || {};
+        if (!discordAccessToken || !teamspaceSession.token || !teamspaceSession.user) {
+          throw new Error("The authentication service returned an incomplete session. Please retry.");
+        }
+        issuedSessionToken = teamspaceSession.token;
+
+        setAuth({ status: "finishing", message: "Finishing your Discord connection…" });
         await discordSdk.commands.authenticate({ access_token: discordAccessToken });
-        if (cancelled) return;
+        if (cancelled) {
+          void apiRequest("/api/v1/auth/logout", { method: "POST", token: issuedSessionToken }).catch(() => {});
+          return;
+        }
 
         setSession(teamspaceSession);
-        setAuth({ status: "connected", message: "Discord identity verified by the TeamSpace API." });
-        try {
-          const teamsResponse = await fetch(`${apiOrigin}/api/v1/teams`, {
-            headers: { Authorization: `Bearer ${teamspaceSession.token}` },
-          });
-          const teamsPayload = await teamsResponse.json().catch(() => ({}));
-          if (!teamsResponse.ok) throw new Error(teamsPayload.message || "Could not load teams.");
-          if (!cancelled) setTeams(teamsPayload.teams ?? []);
-        } catch (error) {
-          if (!cancelled) setTeamStatus(error instanceof Error ? error.message : "Could not load teams.");
-        }
+        setAuth({ status: "connected", message: "Your Discord identity is verified." });
+        await loadTeams(teamspaceSession.token);
       } catch (error) {
+        if (issuedSessionToken) {
+          void apiRequest("/api/v1/auth/logout", { method: "POST", token: issuedSessionToken }).catch(() => {});
+        }
         if (!cancelled) {
+          setSession(null);
           setAuth({
             status: "error",
-            message: error instanceof Error
-              ? error.message
-              : "Could not connect to Discord. Open this Activity inside Discord and check the application settings.",
+            message: error instanceof Error ? error.message : "Could not complete Discord authentication.",
           });
         }
       }
     }
 
-    void connectDiscord();
+    void connect();
     return () => { cancelled = true; };
-  }, [clientId, apiOrigin]);
+  }, [authAttempt, loadTeams]);
+
+  const workspaceCount = useMemo(
+    () => teams.reduce((count, team) => count + (team.workspaces?.length || 0), 0),
+    [teams],
+  );
+  const openTaskCount = useMemo(() => tasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED").length, [tasks]);
+
+  async function openWorkspace(workspace, role) {
+    if (!session?.token) return;
+    setSelectedWorkspace({ ...workspace, teamRole: role });
+    setActiveView("tasks");
+    setTasks([]);
+    setLoadingTasks(true);
+    setTaskStatus("");
+    try {
+      const result = await apiRequest(`/api/v1/workspaces/${encodeURIComponent(workspace.id)}/tasks`, { token: session.token });
+      setTasks(Array.isArray(result.tasks) ? result.tasks : []);
+    } catch (error) {
+      setTaskStatus(error instanceof Error ? error.message : "Could not load workspace tasks.");
+    } finally {
+      setLoadingTasks(false);
+    }
+  }
 
   async function createTeam(event) {
     event.preventDefault();
-    if (!session?.token || !teamName.trim()) return;
+    const name = teamName.trim();
+    if (!session?.token || !name || creatingTeam) return;
     setCreatingTeam(true);
     setTeamStatus("");
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/teams`, {
+      const result = await apiRequest("/api/v1/teams", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.token}`,
-        },
-        body: JSON.stringify({ name: teamName.trim() }),
+        token: session.token,
+        body: JSON.stringify({ name }),
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.message || `Could not create team (${response.status}).`);
+      if (!result?.team) throw new Error("The API did not return the created team.");
       setTeams((current) => [...current, result.team]);
       setTeamName("");
-      setTeamStatus("Team created and saved to PostgreSQL.");
-      const initialWorkspace = result.team.workspaces?.[0];
-      if (initialWorkspace) void openWorkspace(initialWorkspace, result.team.role, session.token);
+      setTeamStatus("Team created and saved.");
+      const workspace = result.team.workspaces?.[0];
+      if (workspace) void openWorkspace(workspace, result.team.role);
     } catch (error) {
       setTeamStatus(error instanceof Error ? error.message : "Could not create team.");
     } finally {
@@ -108,40 +193,22 @@ function App() {
     }
   }
 
-  async function openWorkspace(workspace, role, token = session?.token) {
-    if (!token) return;
-    setSelectedWorkspace({ ...workspace, teamRole: role });
-    setTasks([]);
-    setTaskStatus("Loading tasks…");
-    try {
-      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${workspace.id}/tasks`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.message || "Could not load tasks.");
-      setTasks(result.tasks ?? []);
-      setTaskStatus("");
-    } catch (error) {
-      setTaskStatus(error instanceof Error ? error.message : "Could not load tasks.");
-    }
-  }
-
   async function createTask(event) {
     event.preventDefault();
-    if (!session?.token || !selectedWorkspace || !taskTitle.trim()) return;
+    const title = taskTitle.trim();
+    if (!session?.token || !selectedWorkspace || !title || creatingTask) return;
     setCreatingTask(true);
     setTaskStatus("");
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks`, {
+      const result = await apiRequest(`/api/v1/workspaces/${encodeURIComponent(selectedWorkspace.id)}/tasks`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
-        body: JSON.stringify({ title: taskTitle.trim() }),
+        token: session.token,
+        body: JSON.stringify({ title }),
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.message || "Could not create task.");
+      if (!result?.task) throw new Error("The API did not return the created task.");
       setTasks((current) => [...current, result.task].sort((a, b) => a.position - b.position));
       setTaskTitle("");
-      setTaskStatus("Task saved to PostgreSQL.");
+      setTaskStatus("Task saved to your workspace.");
     } catch (error) {
       setTaskStatus(error instanceof Error ? error.message : "Could not create task.");
     } finally {
@@ -153,13 +220,11 @@ function App() {
     if (!session?.token || !selectedWorkspace) return;
     setTaskStatus("");
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks/${task.id}`, {
+      const result = await apiRequest(`/api/v1/workspaces/${encodeURIComponent(selectedWorkspace.id)}/tasks/${encodeURIComponent(task.id)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
+        token: session.token,
         body: JSON.stringify({ status: task.status === "DONE" ? "TODO" : "DONE" }),
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.message || "Could not update task.");
       setTasks((current) => current.map((item) => item.id === task.id ? result.task : item));
     } catch (error) {
       setTaskStatus(error instanceof Error ? error.message : "Could not update task.");
@@ -170,14 +235,10 @@ function App() {
     if (!session?.token || !selectedWorkspace) return;
     setTaskStatus("");
     try {
-      const response = await fetch(`${apiOrigin}/api/v1/workspaces/${selectedWorkspace.id}/tasks/${task.id}`, {
+      await apiRequest(`/api/v1/workspaces/${encodeURIComponent(selectedWorkspace.id)}/tasks/${encodeURIComponent(task.id)}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${session.token}` },
+        token: session.token,
       });
-      if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.message || "Could not delete task.");
-      }
       setTasks((current) => current.filter((item) => item.id !== task.id));
       setTaskStatus("Task deleted.");
     } catch (error) {
@@ -185,95 +246,218 @@ function App() {
     }
   }
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">T</div>
-        <div><p className="eyebrow">TEAM WORKSPACE</p><h1>TeamSpace</h1></div>
-        <span className={`status-pill ${auth.status}`}><span className="status-dot" />{auth.status === "connected" ? "Connected" : auth.status === "starting" ? "Connecting" : "Setup needed"}</span>
-      </header>
+  async function signOut() {
+    if (!session?.token || signingOut) return;
+    setSigningOut(true);
+    let message = "Your TeamSpace session has been cleared from this Activity.";
+    try {
+      await apiRequest("/api/v1/auth/logout", { method: "POST", token: session.token });
+    } catch (error) {
+      message = error instanceof Error
+        ? `Signed out locally, but the server could not revoke the session: ${error.message}`
+        : "Signed out locally, but the server could not revoke the session.";
+    } finally {
+      setSession(null);
+      setTeams([]);
+      setTasks([]);
+      setSelectedWorkspace(null);
+      setActiveView("overview");
+      setAuth({ status: "signed-out", message });
+      setSigningOut(false);
+    }
+  }
 
-      <section className="hero">
-        <p className="eyebrow">YOUR TEAM, IN SYNC</p>
-        <h2>A calmer place to<br /><span>get work moving.</span></h2>
-        <p className="intro">TeamSpace brings your team’s workspace into Discord, with customizable layouts, approved widgets, and real-time collaboration.</p>
-      </section>
+  function reconnect() {
+    setSession(null);
+    setTeams([]);
+    setTasks([]);
+    setSelectedWorkspace(null);
+    setTeamStatus("");
+    setTaskStatus("");
+    setAuthAttempt((attempt) => attempt + 1);
+  }
 
-      <section className="setup-card" aria-labelledby="setup-title">
-        <div className="card-icon" aria-hidden="true">{session ? "✓" : "↗"}</div>
-        <div className="card-content">
-          <h3 id="setup-title">{session ? `Welcome, ${session.user.displayName || session.user.username}` : "Connect your Discord account"}</h3>
-          <p>{auth.message}</p>
-          <ul className="checks">
-            <li><span className="check-mark">✓</span> Workspace-first architecture</li>
-            <li><span className="check-mark">✓</span> Discord identity verified server-side</li>
-            <li><span className={session ? "check-mark" : "pending-mark"}>{session ? "✓" : "○"}</span> {session ? "Session created" : "Team and workspace setup comes next"}</li>
-          </ul>
-          <p className="config-line">API target: {apiOrigin || "same-origin /api proxy"}</p>
-          {session && <p className="config-line">Session expires: {new Date(session.expiresAt).toLocaleString()}</p>}
-        </div>
-      </section>
+  const displayName = session?.user?.displayName || session?.user?.username || "there";
+  const avatarUrl = session?.user?.avatar && session?.user?.discordId
+    ? `https://cdn.discordapp.com/avatars/${session.user.discordId}/${session.user.avatar}.png?size=96`
+    : null;
 
-      {session && (
-        <section className="teams-panel" aria-labelledby="teams-title">
-          <div className="teams-heading">
-            <div><p className="eyebrow">YOUR ORGANIZATION</p><h3 id="teams-title">Teams & workspaces</h3></div>
-            <span className="team-count">{teams.length} {teams.length === 1 ? "team" : "teams"}</span>
-          </div>
-          <form className="team-form" onSubmit={createTeam}>
-            <label htmlFor="team-name">Create a team</label>
-            <div className="team-form-row">
-              <input id="team-name" value={teamName} onChange={(event) => setTeamName(event.target.value)} maxLength={80} placeholder="e.g. Design team" required />
-              <button type="submit" disabled={creatingTeam || !teamName.trim()}>{creatingTeam ? "Creating…" : "Create team"}</button>
+  if (!session) {
+    const busy = ["starting", "authorizing", "finishing"].includes(auth.status);
+    return (
+      <main className="auth-screen">
+        <div className="auth-orb auth-orb-one" />
+        <div className="auth-orb auth-orb-two" />
+        <header className="auth-topbar">
+          <Brand />
+          <span className={`connection-indicator ${busy ? "is-pending" : auth.status === "error" ? "is-error" : "is-idle"}`}>
+            <span className="indicator-dot" />{busy ? "Connecting" : auth.status === "error" ? "Connection issue" : "Discord Activity"}
+          </span>
+        </header>
+        <section className="auth-layout">
+          <div className="auth-copy">
+            <div className="overline"><span className="overline-line" /> YOUR TEAM, IN SYNC</div>
+            <h1>Work together.<br /><span>Move forward.</span></h1>
+            <p className="auth-lead">A focused home for your team’s projects, tasks, and shared work — right inside Discord.</p>
+            <div className="auth-benefits">
+              <div className="benefit"><span className="benefit-icon">⌘</span><span><strong>One shared workspace</strong><small>Keep your team organized in one place.</small></span></div>
+              <div className="benefit"><span className="benefit-icon">↗</span><span><strong>Discord identity</strong><small>Your account is verified through Discord.</small></span></div>
+              <div className="benefit"><span className="benefit-icon">◈</span><span><strong>Server-verified access</strong><small>Your session is issued by the TeamSpace API.</small></span></div>
             </div>
-          </form>
-          {teamStatus && <p className="team-status" role="status">{teamStatus}</p>}
-          {teams.length > 0 ? (
-            <div className="team-grid">
-              {teams.map((team) => (
-                <article className="team-card" key={team.id}>
-                  <div className="team-card-top"><span className="team-avatar">{team.name.slice(0, 1).toUpperCase()}</span><span className="role-chip">{team.role}</span></div>
-                  <h4>{team.name}</h4><p className="team-slug">/{team.slug}</p>
-                  <div className="workspace-list">
-                    {(team.workspaces ?? []).map((workspace) => <button type="button" className="workspace-row" key={workspace.id} onClick={() => openWorkspace(workspace, team.role, session.token)}><span className="workspace-icon">▦</span><span>{workspace.name}</span><span className="workspace-open">Open</span></button>)}
-                  </div>
-                </article>
+          </div>
+          <div className="auth-card">
+            <div className="auth-card-mark"><BrandMark /></div>
+            <p className="eyebrow">SECURE SIGN-IN</p>
+            <h2>{busy ? "Connecting to Discord" : auth.status === "configuration" ? "Setup required" : auth.status === "signed-out" ? "You’re signed out" : auth.status === "error" ? "Couldn’t connect" : "Welcome to TeamSpace"}</h2>
+            <p className="auth-message" role="status">{auth.message}</p>
+            <div className={`auth-progress ${busy ? "active" : ""}`}>
+              <span className={busy ? "step complete" : "step"}>1</span><span className="progress-line" />
+              <span className={["authorizing", "finishing"].includes(auth.status) ? "step complete" : "step"}>2</span><span className="progress-line" />
+              <span className={auth.status === "connected" ? "step complete" : "step"}>3</span>
+            </div>
+            <div className="progress-labels"><span>Discord</span><span>Verify</span><span>Workspace</span></div>
+            {busy ? (
+              <div className="loading-state"><span className="spinner" /><span>Waiting for Discord to finish authentication…</span></div>
+            ) : (
+              <button className="primary-button auth-action" onClick={reconnect} disabled={auth.status === "configuration"}>
+                <span className="discord-glyph">◉</span>{auth.status === "configuration" ? "Configuration required" : auth.status === "signed-out" ? "Reconnect Discord" : "Try again"}
+                <span className="button-arrow">↗</span>
+              </button>
+            )}
+            <p className="auth-footnote"><span className="lock-icon">▣</span> Authentication is handled by Discord and the TeamSpace API. No password is stored by this Activity.</p>
+          </div>
+        </section>
+        <footer className="auth-footer"><span>© {new Date().getFullYear()} TeamSpace</span><span>Powered by <strong>TJ Studios</strong></span></footer>
+      </main>
+    );
+  }
+
+  return (
+    <main className="workspace-app">
+      <aside className="sidebar">
+        <Brand />
+        <div className="sidebar-section-label">WORKSPACE</div>
+        <button className={`nav-item ${activeView === "overview" ? "active" : ""}`} onClick={() => setActiveView("overview")}><span className="nav-icon">⌂</span>Overview</button>
+        <button className={`nav-item ${activeView === "tasks" ? "active" : ""}`} onClick={() => setActiveView("tasks")}><span className="nav-icon">☷</span>Tasks <span className="nav-count">{tasks.length || ""}</span></button>
+        <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR TEAMS</span><span className="sidebar-count">{teams.length}</span></div>
+        <div className="sidebar-team-list">
+          {teams.map((team) => (
+            <div className="sidebar-team" key={team.id}>
+              <div className="sidebar-team-avatar">{initials(team.name)}</div>
+              <div className="sidebar-team-content"><strong>{team.name}</strong><small>{team.workspaces?.length || 0} workspaces</small></div>
+              <span className="team-role-dot" title={team.role} />
+              {(team.workspaces || []).map((workspace) => (
+                <button className={`sidebar-workspace ${selectedWorkspace?.id === workspace.id ? "selected" : ""}`} key={workspace.id} onClick={() => void openWorkspace(workspace, team.role)}>
+                  <span>▦</span>{workspace.name}
+                </button>
               ))}
             </div>
-          ) : <p className="empty-teams">No teams yet. Create one to initialize your first workspace.</p>}
-        </section>
-      )}
-
-
-      {selectedWorkspace && session && (
-        <section className="tasks-panel" aria-labelledby="tasks-title">
-          <div className="teams-heading">
-            <div><p className="eyebrow">WORKSPACE</p><h3 id="tasks-title">{selectedWorkspace.name} tasks</h3></div>
-            <span className="team-count">{tasks.length} {tasks.length === 1 ? "task" : "tasks"}</span>
+          ))}
+          {!teams.length && !loadingTeams && <p className="sidebar-empty">Your teams will appear here.</p>}
+        </div>
+        <button className="sidebar-create" onClick={() => { setActiveView("overview"); document.getElementById("create-team-name")?.focus(); }}><span>＋</span> Create a team</button>
+        <div className="sidebar-bottom">
+          <div className="sidebar-user">
+            {avatarUrl ? <img className="user-avatar" src={avatarUrl} alt="" /> : <div className="user-avatar avatar-fallback">{initials(displayName)}</div>}
+            <div className="user-copy"><strong>{displayName}</strong><small>Connected with Discord</small></div>
+            <button className="icon-button" onClick={() => void signOut()} disabled={signingOut} aria-label="Sign out" title="Sign out">↪</button>
           </div>
-          <form className="team-form" onSubmit={createTask}>
-            <label htmlFor="task-title">Add a task</label>
-            <div className="team-form-row">
-              <input id="task-title" value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={160} placeholder="What needs to get done?" required />
-              <button type="submit" disabled={creatingTask || !taskTitle.trim()}>{creatingTask ? "Saving…" : "Add task"}</button>
+          <div className="powered-by">POWERED BY <strong>TJ STUDIOS</strong></div>
+        </div>
+      </aside>
+
+      <section className="main-panel">
+        <header className="main-topbar">
+          <div className="breadcrumb"><span>TeamSpace</span><span className="breadcrumb-slash">/</span><strong>{activeView === "tasks" ? selectedWorkspace?.name || "Tasks" : "Overview"}</strong></div>
+          <div className="topbar-right"><span className="live-status"><span /> API session active</span><div className="topbar-avatar">{initials(displayName)}</div></div>
+        </header>
+
+        {activeView === "overview" ? (
+          <div className="page-content">
+            <div className="welcome-row">
+              <div><p className="eyebrow">YOUR TEAMSPACE</p><h1>Good to have you here, {displayName.split(" ")[0]}.</h1><p className="page-subtitle">Here’s what’s happening across your teams.</p></div>
+              <span className="date-chip">{new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(new Date())}</span>
             </div>
-          </form>
-          {taskStatus && <p className="team-status" role="status">{taskStatus}</p>}
-          <div className="task-list">
-            {tasks.map((task) => (
-              <article className={`task-row ${task.status === "DONE" ? "task-done" : ""}`} key={task.id}>
-                <button type="button" className="task-toggle" aria-label={task.status === "DONE" ? "Mark task incomplete" : "Mark task complete"} onClick={() => toggleTask(task)}>{task.status === "DONE" ? "✓" : "○"}</button>
-                <div className="task-copy"><h4>{task.title}</h4><p>{task.status.replaceAll("_", " ")}</p></div>
-                {["OWNER", "ADMIN", "EDITOR"].includes(selectedWorkspace.teamRole) && <button type="button" className="task-delete" aria-label={`Delete ${task.title}`} onClick={() => deleteTask(task)}>×</button>}
-              </article>
-            ))}
-            {tasks.length === 0 && !taskStatus && <p className="empty-teams">No tasks in this workspace yet.</p>}
+            <div className="stat-grid">
+              <StatCard label="Your teams" value={teams.length} detail="Teams you belong to" icon="◈" />
+              <StatCard label="Workspaces" value={workspaceCount} detail="Across your teams" icon="▦" />
+              <StatCard label="Tasks loaded" value={tasks.length} detail={selectedWorkspace ? selectedWorkspace.name : "Open a workspace to view tasks"} icon="☷" />
+            </div>
+            <div className="content-grid">
+              <section className="panel-card teams-overview">
+                <div className="panel-heading"><div><p className="eyebrow">ORGANIZATION</p><h2>Your teams</h2></div><span className="panel-meta">{loadingTeams ? "Refreshing…" : `${teams.length} total`}</span></div>
+                {teamStatus && <p className="inline-alert" role="status">{teamStatus}</p>}
+                {teams.length ? <div className="overview-team-list">{teams.map((team) => (
+                  <article className="overview-team-row" key={team.id}>
+                    <div className="team-large-avatar">{initials(team.name)}</div>
+                    <div className="overview-team-copy"><strong>{team.name}</strong><span>/{team.slug} · {team.workspaces?.length || 0} workspaces</span></div>
+                    <span className="role-badge">{team.role}</span>
+                    <div className="overview-workspaces">{(team.workspaces || []).map((workspace) => <button key={workspace.id} onClick={() => void openWorkspace(workspace, team.role)}><span>▦</span>{workspace.name}<span className="row-arrow">→</span></button>)}</div>
+                  </article>
+                ))}</div> : <EmptyState icon="◈" title={loadingTeams ? "Loading your teams" : "Your team starts here"} description={loadingTeams ? "Getting the latest data from the TeamSpace API." : "Create a team to create its first workspace and start organizing tasks."} />}
+              </section>
+              <section className="panel-card create-panel">
+                <div className="create-panel-icon">＋</div><p className="eyebrow">GET STARTED</p><h2>Create a team</h2><p>Set up a shared space for a project, department, or group.</p>
+                <form onSubmit={createTeam} className="create-form">
+                  <label htmlFor="create-team-name">Team name</label>
+                  <input id="create-team-name" value={teamName} onChange={(event) => setTeamName(event.target.value)} maxLength={80} placeholder="e.g. Product team" required />
+                  <button className="primary-button" type="submit" disabled={creatingTeam || !teamName.trim()}>{creatingTeam ? "Creating team…" : "Create team"} <span>→</span></button>
+                </form>
+                {teamStatus && <p className="form-message" role="status">{teamStatus}</p>}
+              </section>
+            </div>
+            <div className="bottom-note"><span className="note-dot" />Live data from your TeamSpace API and PostgreSQL database. No demo content.</div>
           </div>
-        </section>
-      )}
-      <footer><span>TEAMSPACE</span><span>Early development · Do not use for production</span></footer>
+        ) : (
+          <div className="page-content">
+            <div className="welcome-row">
+              <div><p className="eyebrow">WORK MANAGEMENT</p><h1>{selectedWorkspace ? selectedWorkspace.name : "Workspace tasks"}</h1><p className="page-subtitle">{selectedWorkspace ? "Track the work that moves your team forward." : "Choose a workspace from the sidebar to view its tasks."}</p></div>
+              {selectedWorkspace && <span className="role-badge">{selectedWorkspace.teamRole}</span>}
+            </div>
+            {selectedWorkspace ? (
+              <section className="panel-card task-panel">
+                <div className="panel-heading"><div><p className="eyebrow">TASK BOARD</p><h2>Tasks <span className="subtle-count">{tasks.length}</span></h2></div><span className="panel-meta">{loadingTasks ? "Loading…" : `${openTaskCount} open`}</span></div>
+                <form className="task-create-form" onSubmit={createTask}>
+                  <span className="task-add-icon">＋</span><input value={taskTitle} onChange={(event) => setTaskTitle(event.target.value)} maxLength={160} placeholder="Add a task to this workspace…" aria-label="New task title" required />
+                  <button className="primary-button" type="submit" disabled={creatingTask || !taskTitle.trim()}>{creatingTask ? "Saving…" : "Add task"}</button>
+                </form>
+                {taskStatus && <p className="inline-alert" role="status">{taskStatus}</p>}
+                <div className="task-list">
+                  {tasks.map((task) => (
+                    <article className={`task-row ${task.status === "DONE" ? "is-done" : ""}`} key={task.id}>
+                      <button className={`task-check ${task.status === "DONE" ? "checked" : ""}`} onClick={() => void toggleTask(task)} aria-label={task.status === "DONE" ? "Mark incomplete" : "Mark complete"}>{task.status === "DONE" ? "✓" : ""}</button>
+                      <div className="task-info"><strong>{task.title}</strong><span>{task.status.replaceAll("_", " ")} · Updated {formatDate(task.updatedAt)}</span></div>
+                      <span className={`task-status status-${task.status.toLowerCase()}`}>{task.status.replaceAll("_", " ")}</span>
+                      {["OWNER", "ADMIN", "EDITOR"].includes(selectedWorkspace.teamRole) && <button className="task-delete" onClick={() => void deleteTask(task)} aria-label={`Delete ${task.title}`} title="Delete task">×</button>}
+                    </article>
+                  ))}
+                  {loadingTasks && <EmptyState icon="◌" title="Loading tasks" description="Fetching the latest tasks from your workspace." />}
+                  {!loadingTasks && tasks.length === 0 && !taskStatus && <EmptyState icon="☷" title="A clean slate" description="Add your first task above. It will be saved to the TeamSpace database." />}
+                </div>
+              </section>
+            ) : <EmptyState icon="▦" title="Select a workspace" description="Choose one of your team's workspaces in the sidebar to open its task board." />}
+            <div className="bottom-note"><span className="note-dot" />Changes are saved through the authenticated TeamSpace API.</div>
+          </div>
+        )}
+      </section>
     </main>
   );
+}
+
+function BrandMark() {
+  return <span className="brand-mark"><span /></span>;
+}
+
+function Brand() {
+  return <div className="brand-lockup"><BrandMark /><span className="brand-wordmark">TeamSpace<small>POWERED BY TJ STUDIOS</small></span></div>;
+}
+
+function StatCard({ label, value, detail, icon }) {
+  return <article className="stat-card"><div className="stat-card-top"><span>{label}</span><span className="stat-icon">{icon}</span></div><strong className="stat-value">{value}</strong><small>{detail}</small></article>;
+}
+
+function EmptyState({ icon, title, description }) {
+  return <div className="empty-state"><span className="empty-icon">{icon}</span><strong>{title}</strong><p>{description}</p></div>;
 }
 
 createRoot(document.getElementById("root")).render(<App />);
