@@ -5,7 +5,7 @@ import "./styles.css";
 
 function App() {
   const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID;
-  const apiOrigin = import.meta.env.VITE_API_ORIGIN || "http://localhost:4000";
+  const apiOrigin = (import.meta.env.VITE_API_ORIGIN || "").replace(/\/$/, "");
   const started = useRef(false);
   const [auth, setAuth] = useState({ status: "starting", message: "Preparing Discord authorization…" });
   const [session, setSession] = useState(null);
@@ -209,7 +209,7 @@ function App() {
             <li><span className="check-mark">✓</span> Discord identity verified server-side</li>
             <li><span className={session ? "check-mark" : "pending-mark"}>{session ? "✓" : "○"}</span> {session ? "Session created" : "Team and workspace setup comes next"}</li>
           </ul>
-          <p className="config-line">API target: {apiOrigin}</p>
+          <p className="config-line">API target: {apiOrigin || "same-origin /api proxy"}</p>
           {session && <p className="config-line">Session expires: {new Date(session.expiresAt).toLocaleString()}</p>}
         </div>
       </section>
