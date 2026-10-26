@@ -18,7 +18,8 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "db:generate": "pnpm --filter @teamspace/database db:generate",
     "db:validate": "pnpm --filter @teamspace/database db:validate",
-    "db:migrate": "pnpm --filter @teamspace/database db:migrate"
+    "db:migrate": "pnpm --filter @teamspace/database db:migrate",
+    "dev:dashboard": "pnpm --filter @teamspace/dashboard dev"
   },
   "devDependencies": {
     "prettier": "^3.5.3"
