@@ -2,6 +2,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable
 COPY . .
+ENV DATABASE_URL=postgresql://teamspace:build-only@localhost:5432/teamspace?schema=public
 ARG VITE_DISCORD_CLIENT_ID=
 ARG VITE_API_ORIGIN=http://localhost:4000
 ARG VITE_REALTIME_ORIGIN=ws://localhost:2567
