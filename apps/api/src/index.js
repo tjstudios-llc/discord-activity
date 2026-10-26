@@ -168,6 +168,7 @@ app.get("/api/v1", async () => ({
 }));
 
 app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
+  reply.header("Cache-Control", "no-store");
   const parsed = exchangeBodySchema.safeParse(request.body);
   if (!parsed.success) {
     return reply.code(400).send({ error: "invalid_request", message: "A valid Discord authorization code is required." });
@@ -224,25 +225,27 @@ app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, time
     return reply.code(502).send({ error: "discord_unavailable", message: "Discord identity is temporarily unavailable." });
   }
 
-  const user = await prisma.user.upsert({
-    where: { discordId: discordUser.id },
-    update: {
-      username: discordUser.username,
-      displayName: discordUser.global_name ?? discordUser.username,
-      avatar: discordUser.avatar ?? null,
-    },
-    create: {
-      discordId: discordUser.id,
-      username: discordUser.username,
-      displayName: discordUser.global_name ?? discordUser.username,
-      avatar: discordUser.avatar ?? null,
-    },
-  });
-
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await prisma.authSession.create({
-    data: { userId: user.id, tokenHash: hashSessionToken(token), expiresAt },
+  const user = await prisma.$transaction(async (tx) => {
+    const savedUser = await tx.user.upsert({
+      where: { discordId: discordUser.id },
+      update: {
+        username: discordUser.username,
+        displayName: discordUser.global_name ?? discordUser.username,
+        avatar: discordUser.avatar ?? null,
+      },
+      create: {
+        discordId: discordUser.id,
+        username: discordUser.username,
+        displayName: discordUser.global_name ?? discordUser.username,
+        avatar: discordUser.avatar ?? null,
+      },
+    });
+    await tx.authSession.create({
+      data: { userId: savedUser.id, tokenHash: hashSessionToken(token), expiresAt },
+    });
+    return savedUser;
   });
 
   return reply.code(200).send({
@@ -254,6 +257,7 @@ app.post("/api/v1/auth/discord/exchange", { config: { rateLimit: { max: 10, time
 });
 
 app.get("/api/v1/auth/me", async (request, reply) => {
+  reply.header("Cache-Control", "no-store");
   try {
     const session = await readSession(request);
     if (!session) return reply.code(401).send({ error: "unauthorized", message: "A valid session is required." });
@@ -265,6 +269,7 @@ app.get("/api/v1/auth/me", async (request, reply) => {
 });
 
 app.post("/api/v1/auth/logout", async (request, reply) => {
+  reply.header("Cache-Control", "no-store");
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) return reply.code(204).send();
   const token = authorization.slice("Bearer ".length);
