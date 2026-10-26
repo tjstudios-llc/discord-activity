@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { z } from "zod";
+import { prisma } from "@teamspace/database";
 
 const env = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -22,14 +23,45 @@ await app.register(cors, {
 });
 await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });
 
-app.get("/health", async () => ({ status: "ok", service: "teamspace-api", timestamp: new Date().toISOString() }));
-app.get("/ready", async (_request, reply) => reply.code(200).send({ status: "ready", checks: { database: "not-configured" } }));
-app.get("/api/v1", async () => ({ name: "TeamSpace API", version: "v1", status: "foundation", authentication: "not-configured" }));
+app.get("/health", async () => ({
+  status: "ok",
+  service: "teamspace-api",
+  timestamp: new Date().toISOString(),
+}));
+
+app.get("/ready", async (_request, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return { status: "ready", checks: { database: "ok" } };
+  } catch (error) {
+    app.log.warn({ err: error }, "Readiness check failed");
+    return reply.code(503).send({ status: "not_ready", checks: { database: "unavailable" } });
+  }
+});
+
+app.get("/api/v1", async () => ({
+  name: "TeamSpace API",
+  version: "v1",
+  status: "foundation",
+  authentication: "not-configured",
+}));
+
 app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: "not_found", message: "Route not found" }));
 app.setErrorHandler((error, request, reply) => {
   request.log.error({ err: error }, "Request failed");
   const statusCode = error.statusCode && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500;
-  return reply.code(statusCode).send({ error: statusCode === 500 ? "internal_error" : "request_error", message: statusCode === 500 ? "An unexpected error occurred" : error.message });
+  return reply.code(statusCode).send({
+    error: statusCode === 500 ? "internal_error" : "request_error",
+    message: statusCode === 500 ? "An unexpected error occurred" : error.message,
+  });
 });
-try { await app.listen({ host: "0.0.0.0", port: env.API_PORT }); }
-catch (error) { app.log.error(error); process.exitCode = 1; }
+
+app.addHook("onClose", async () => { await prisma.$disconnect(); });
+
+try {
+  await app.listen({ host: "0.0.0.0", port: env.API_PORT });
+} catch (error) {
+  app.log.error(error);
+  await prisma.$disconnect();
+  process.exitCode = 1;
+}
