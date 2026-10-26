@@ -31,7 +31,18 @@ Discord's proxy cannot serve your computer's `localhost:5173` directly as the Ac
 6. In **Developer Portal → Activities → URL Mappings**, set prefix `/` to that tunnel hostname and save.
 7. Relaunch the Activity in Discord. Do not enable Application URL Override when testing through the proxy.
 
-The Vite dev server proxies requests under `/api` to the Fastify API on port `4000`. This keeps the Activity's API calls on the same origin as the page and avoids hardcoding `localhost:4000` into the Discord iframe. This proxy is for local development only; production deployments must route `/api` to the API through their reverse proxy or configure a reachable HTTPS `VITE_API_ORIGIN` and exact API CORS origins.
+The Vite dev server proxies requests under `/api` to the Fastify API on port `4000`. The redesigned frontend centralizes requests through one API helper and uses same-origin `/api` by default. This keeps the Activity's API calls on the same origin as the page and avoids hardcoding `localhost:4000` into the Discord iframe. This proxy is for local development only; production deployments must route `/api` to the API through their reverse proxy or configure a reachable HTTPS `VITE_API_ORIGIN` and exact API CORS origins.
+
+## Authentication flow and session behavior
+
+1. The Activity waits for `DiscordSDK.ready()`, then requests an authorization code with the `identify` scope.
+2. The frontend sends that code to `POST /api/v1/auth/discord/exchange` through the same-origin API helper.
+3. The API exchanges the code using its server-side Discord client secret, fetches the verified Discord identity, and creates/updates the user plus hashed TeamSpace session in a database transaction.
+4. The API returns the Discord access token needed by the Embedded App SDK and a TeamSpace session token. The frontend immediately passes the Discord token to `discordSdk.commands.authenticate()`; it does not persist either token in local storage.
+5. Authenticated API calls use the TeamSpace session token held in memory. Logout revokes the server session. Auth responses include `Cache-Control: no-store`.
+6. If SDK authentication fails after a TeamSpace session was issued, the frontend attempts to revoke that session before displaying a retry action.
+
+The Activity's sign-in screen is not a separate email/password login page: Discord Activities should use the Embedded App SDK identity flow. The API's Discord client secret must remain server-side. Test the full flow inside Discord; local route tests alone do not verify Discord's hosted proxy or OAuth configuration.
 
 ## Alternative: local URL override
 
