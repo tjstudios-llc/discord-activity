@@ -36,6 +36,7 @@ model User {
   assignedTasks Task[]                @relation("TaskAssignee")
   notes         Note[]
   auditEvents   AuditEvent[]
+  sessions      AuthSession[]
 }
 
 model Team {
@@ -173,4 +174,16 @@ model AuditEvent {
 
   @@index([teamId, createdAt])
   @@index([actorId, createdAt])
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
