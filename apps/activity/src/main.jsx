@@ -47,13 +47,16 @@ function App() {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.message || `Authentication failed (${response.status}).`);
+        const { access_token: discordAccessToken, ...teamspaceSession } = result;
+        if (!discordAccessToken) throw new Error("The API did not return a Discord access token.");
+        await discordSdk.commands.authenticate({ access_token: discordAccessToken });
         if (cancelled) return;
 
-        setSession(result);
+        setSession(teamspaceSession);
         setAuth({ status: "connected", message: "Discord identity verified by the TeamSpace API." });
         try {
           const teamsResponse = await fetch(`${apiOrigin}/api/v1/teams`, {
-            headers: { Authorization: `Bearer ${result.token}` },
+            headers: { Authorization: `Bearer ${teamspaceSession.token}` },
           });
           const teamsPayload = await teamsResponse.json().catch(() => ({}));
           if (!teamsResponse.ok) throw new Error(teamsPayload.message || "Could not load teams.");
