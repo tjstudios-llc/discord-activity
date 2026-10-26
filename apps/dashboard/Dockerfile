@@ -2,6 +2,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable
 COPY . .
+ENV DATABASE_URL=postgresql://teamspace:build-only@localhost:5432/teamspace?schema=public
 RUN pnpm install --no-frozen-lockfile && pnpm --filter @teamspace/dashboard build
 
 FROM node:22-alpine
