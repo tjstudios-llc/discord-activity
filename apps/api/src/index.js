@@ -5,6 +5,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { z } from "zod";
 import { prisma } from "@teamspace/database";
+import gameRoutes from "./game-routes.js";
 
 const env = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -521,6 +522,8 @@ app.delete("/api/v1/workspaces/:workspaceId/tasks/:taskId", async (request, repl
   });
   return reply.code(204).send();
 });
+
+await app.register(gameRoutes);
 
 app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: "not_found", message: "Route not found" }));
 app.setErrorHandler((error, request, reply) => {
