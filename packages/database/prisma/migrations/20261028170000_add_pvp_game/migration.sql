@@ -2,8 +2,6 @@
 CREATE TYPE "GameItemType" AS ENUM ('CHARACTER', 'WEAPON', 'SKIN');
 CREATE TYPE "GameMode" AS ENUM ('TEAM', 'FREE_FOR_ALL');
 CREATE TYPE "GameMatchStatus" AS ENUM ('WAITING', 'ACTIVE', 'COMPLETED');
-ALTER TABLE "User" ADD COLUMN "gameProfilePlaceholder" BOOLEAN;
-ALTER TABLE "User" DROP COLUMN "gameProfilePlaceholder";
 CREATE TABLE "GameProfile" (
   "id" TEXT NOT NULL,
   "userId" TEXT NOT NULL,
