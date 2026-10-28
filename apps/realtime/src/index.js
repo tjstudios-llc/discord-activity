@@ -44,7 +44,7 @@ class ArenaRoom extends Room {
     const character = await prisma.gameItem.findUnique({ where: { slug: profile.selectedCharacterId } });
     const weapon = await prisma.gameItem.findUnique({ where: { slug: profile.selectedWeaponId } });
     const index = this.players.size;
-    this.players.set(client.sessionId, { sessionId: client.sessionId, userId, name: "Player " + (index + 1), x: this.mode === "TEAM" ? (index % 2 ? 1320 : 280) : 200 + Math.random() * 1200, y: 150 + Math.random() * 600, aimX: 1, aimY: 0, health: 100, maxHealth: 100, speed: Number(character?.stats?.speed) * 180 || 180, color: character?.stats?.color || (index % 2 ? "#ff718b" : "#62e6c5"), weapon: { damage: Number(weapon?.stats?.damage) || 25, cooldown: Number(weapon?.stats?.cooldown) || 0.32, speed: Number(weapon?.stats?.speed) || 540 }, team: this.mode === "TEAM" ? (index % 2 ? "blue" : "red") : null, kills: 0, deaths: 0, lastShot: 0, respawnAt: 0, input: { x: 0, y: 0, fire: false } });
+    this.players.set(client.sessionId, { sessionId: client.sessionId, userId, joinedAt: Date.now(), name: "Player " + (index + 1), x: this.mode === "TEAM" ? (index % 2 ? 1320 : 280) : 200 + Math.random() * 1200, y: 150 + Math.random() * 600, aimX: 1, aimY: 0, health: 100, maxHealth: 100, speed: Number(character?.stats?.speed) * 180 || 180, color: character?.stats?.color || (index % 2 ? "#ff718b" : "#62e6c5"), weapon: { damage: Number(weapon?.stats?.damage) || 25, cooldown: Number(weapon?.stats?.cooldown) || 0.32, speed: Number(weapon?.stats?.speed) || 540 }, team: this.mode === "TEAM" ? (index % 2 ? "blue" : "red") : null, kills: 0, deaths: 0, lastShot: 0, respawnAt: 0, input: { x: 0, y: 0, fire: false } });
     client.send("welcome", { matchId: this.matchRecord.id, mode: this.mode.toLowerCase(), playerId: client.sessionId, arena: ARENA, durationMs: MATCH_DURATION_MS });
   }
   applyInput(client, payload) {
@@ -90,7 +90,8 @@ class ArenaRoom extends Room {
       await tx.gameMatch.update({ where: { id: this.matchRecord.id }, data: { status: "COMPLETED", endedAt: new Date() } });
       for (const [index, player] of ranked.entries()) {
         const won = this.mode === "TEAM" ? winningTeam !== null && player.team === winningTeam : player.sessionId === ffaWinner;
-        const xpEarned = 100 + player.kills * 20 + (won ? 50 : 0), coinsEarned = 25 + player.kills * 5 + (won ? 25 : 0);
+        const participated = Date.now() - player.joinedAt >= 60_000;
+        const xpEarned = (participated ? 100 : 0) + player.kills * 20 + (won ? 50 : 0), coinsEarned = (participated ? 25 : 0) + player.kills * 5 + (won ? 25 : 0);
         await tx.gameMatchPlayer.upsert({ where: { matchId_userId: { matchId: this.matchRecord.id, userId: player.userId } }, update: { team: player.team, kills: player.kills, deaths: player.deaths, placement: index + 1, xpEarned, coinsEarned }, create: { matchId: this.matchRecord.id, userId: player.userId, team: player.team, kills: player.kills, deaths: player.deaths, placement: index + 1, xpEarned, coinsEarned } });
         const profile = await tx.gameProfile.upsert({ where: { userId: player.userId }, update: { xp: { increment: xpEarned }, coins: { increment: coinsEarned }, kills: { increment: player.kills }, deaths: { increment: player.deaths }, wins: { increment: won ? 1 : 0 }, losses: { increment: won ? 0 : 1 } }, create: { userId: player.userId, xp: xpEarned, coins: 150 + coinsEarned, kills: player.kills, deaths: player.deaths, wins: won ? 1 : 0, losses: won ? 0 : 1 } });
         const level = levelForXp(profile.xp); await tx.gameProfile.update({ where: { userId: player.userId }, data: { level } });
