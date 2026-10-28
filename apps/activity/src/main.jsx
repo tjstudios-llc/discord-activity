@@ -107,7 +107,6 @@ function App() {
   const fireRef = useRef(false);
   const moveRef = useRef({ x: 0, y: 0 });
   const aimRef = useRef({ x: 800, y: 450 });
-  const selfIdRef = useRef(null);
   const snapshotRef = useRef(snapshot);
   useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
   const roomRef = useRef(null);
@@ -149,7 +148,7 @@ function App() {
         if (!cancelled) setAuth({ status: "connected", message: "Discord identity verified." });
       } catch (error) {
         if (issuedToken) void apiRequest("/api/v1/auth/logout", { method: "POST", token: issuedToken }).catch(() => {});
-        if (!cancelled) setAuth({ status: "error", message: error instanceof Error ? error.message : "Could not complete Discord authentication." });
+        if (!cancelled) { setSession(null); setProfile(null); setAuth({ status: "error", message: error instanceof Error ? error.message : "Could not complete Discord authentication." }); }
       }
     }
     void connect();
@@ -197,7 +196,7 @@ function App() {
       const joined = await client.joinOrCreate("arena", { mode, token: session.token });
       roomRef.current = joined;
       setRoom(joined);
-      joined.onMessage("welcome", (data) => { selfIdRef.current = data.playerId; });
+      joined.onMessage("welcome", () => {});
       joined.onMessage("snapshot", (data) => setSnapshot(data));
       joined.onMessage("match-ended", (data) => {
         setMatchMessage(data.message || "Match complete.");
