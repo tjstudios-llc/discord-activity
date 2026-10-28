@@ -15,16 +15,6 @@ const catalog = [
   { slug: "golden-core", name: "Golden Core", type: "SKIN", description: "A gold finish for your arena gear.", price: 900, unlockLevel: 1, rarity: "legendary", isStarter: false, stats: { tint: "#ffd166" } },
 ];
 
-function levelForXp(xp) {
-  let level = 1;
-  let remaining = Math.max(0, xp);
-  while (remaining >= level * 100) {
-    remaining -= level * 100;
-    level += 1;
-  }
-  return level;
-}
-
 async function ensureCatalog(tx = prisma) {
   for (const item of catalog) {
     await tx.gameItem.upsert({
