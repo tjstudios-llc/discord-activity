@@ -196,7 +196,7 @@ function App() {
       const joined = await client.joinOrCreate("arena", { mode, token: session.token });
       roomRef.current = joined;
       setRoom(joined);
-      joined.onMessage("welcome", () => {});
+      joined.onMessage("welcome", (data) => { setStatus(data.mode === "team" ? "Connected to Team Battle." : "Connected to Free-for-all."); });
       joined.onMessage("snapshot", (data) => setSnapshot(data));
       joined.onMessage("match-ended", (data) => {
         setMatchMessage(data.message || "Match complete.");
