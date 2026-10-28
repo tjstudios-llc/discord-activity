@@ -1,20 +1,19 @@
-# TeamSpace Arena — Discord PvP Activity
+# TeamSpace Discord Activity
 
-A browser-based top-down 2D arena shooter designed to run as a Discord Activity, with a standalone local development mode.
+A customizable, self-hostable Discord Activity for teams and workspaces.
 
-Players authenticate through Discord, join **Team Battle** or **Free-for-all** matches, earn XP and coins, unlock characters and weapons, shop for gear, and keep their progression between sessions.
+TeamSpace is designed around independent teams and workspaces, with optional Discord server linking. Hosted and self-hosted deployments share one codebase.
 
-> **Status: early development.** This branch replaces the old TeamSpace workspace dashboard with the PvP game foundation. The Discord auth flow, database migrations, realtime WebSocket routing, and gameplay still require end-to-end validation in the configured environment before public release.
+> **Status: early development.** The repository now contains the app shells, API foundation, Discord authorization-code exchange, hashed server-side sessions, initial Prisma schema/migration, and Docker Compose foundation. The Discord flow has not yet been validated end-to-end inside Discord. Team/workspace CRUD, membership enforcement, customization persistence, and real-time authorization are still in progress. Do not use this project for production workloads yet.
 
 ## Repository layout
 
-- `apps/activity` — React + Vite game frontend and 2D canvas renderer
-- `apps/api` — Fastify API for Discord sessions, profiles, inventory, shop, and leaderboard
-- `apps/realtime` — Colyseus server-authoritative arena simulation and match rewards
-- `apps/dashboard` — legacy dashboard shell (not the primary Activity experience)
-- `packages/database` — Prisma schema, migrations, and PostgreSQL client
-- `docs/PVP_GAME_SETUP.md` — PvP setup, environment, controls, security model, and validation checklist
-- `docs/DISCORD_SETUP.md` — Discord Embedded App setup and OAuth flow
+- `apps/activity` — React + Vite embedded Activity client
+- `apps/dashboard` — Next.js Studio dashboard shell
+- `apps/api` — Fastify REST API and Discord auth exchange
+- `apps/realtime` — Colyseus real-time service foundation
+- `packages/database` — Prisma schema, migration, and database client
+- `docs` — architecture, Discord setup, security, and self-hosting
 
 ## Requirements
 
@@ -22,27 +21,26 @@ Players authenticate through Discord, join **Team Battle** or **Free-for-all** m
 - pnpm 10
 - PostgreSQL 16 or compatible PostgreSQL service
 - Discord Developer Portal application configured for Activities
-- A reachable WebSocket endpoint for Colyseus (WSS in production)
 
 ## Local setup
 
 1. Copy `.env.example` to `.env`.
 2. Set `POSTGRES_PASSWORD` and update the password in `DATABASE_URL` to match.
-3. Set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `VITE_DISCORD_CLIENT_ID`. Keep the client secret server-side.
-4. Install dependencies with `pnpm install`.
+3. Set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `VITE_DISCORD_CLIENT_ID` (the public client ID is used by the Activity client).
+4. Install dependencies: `pnpm install`.
 5. Start PostgreSQL and create the database named in `DATABASE_URL`.
 6. Run `pnpm db:validate`, `pnpm db:generate`, and `pnpm db:deploy`.
-7. Set `VITE_REALTIME_ORIGIN=ws://localhost:2567` for local gameplay and start the services with `pnpm dev`.
-8. For Discord-hosted testing, expose the frontend and realtime service over HTTPS/WSS and follow the Activity mapping guidance in `docs/DISCORD_SETUP.md` and `docs/PVP_GAME_SETUP.md`.
+7. Start Activity/API/realtime with `pnpm dev`. Start the dashboard with `pnpm dev:dashboard`.
 
-## Game trust boundaries
+For a local container setup, see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md). Discord URL mapping and OAuth configuration are described in [docs/DISCORD_SETUP.md](docs/DISCORD_SETUP.md).
 
-- Discord authorization codes are exchanged by the API; Discord client secrets never enter the frontend bundle.
-- Session tokens are hashed in PostgreSQL and held in frontend memory only.
-- The Colyseus service validates sessions and owns movement, shots, hit detection, kills, match results, XP, and coin rewards.
-- Shop purchases and loadout changes are validated by the API against PostgreSQL inventory and balance.
-- Unique database constraints and transactions protect inventory ownership and coin spending.
-- Never trust client-provided XP, coins, kills, wins, damage, or match results.
+## Security principles
+
+- Never commit secrets, OAuth codes, real user data, or production database dumps.
+- Keep Discord client secrets on the server; never expose them via `VITE_*` variables.
+- Every team/workspace read and write must enforce membership and role checks server-side.
+- Only render widgets registered in an approved widget registry. Never execute workspace-provided JavaScript.
+- Discord guild association is optional metadata, not proof of TeamSpace membership.
 
 ## License
 
