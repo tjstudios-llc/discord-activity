@@ -6,7 +6,7 @@ import "./styles.css";
 
 const API_ORIGIN = (import.meta.env.VITE_API_ORIGIN || "").replace(/\/$/, "");
 const CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID;
-const REALTIME_URL = import.meta.env.VITE_REALTIME_URL || (location.hostname === "localhost" ? "ws://localhost:2567" : (location.protocol === "https:" ? "wss://" : "ws://") + location.host);
+const REALTIME_URL = import.meta.env.VITE_REALTIME_URL || import.meta.env.VITE_REALTIME_ORIGIN || (location.hostname === "localhost" ? "ws://localhost:2567" : (location.protocol === "https:" ? "wss://" : "ws://") + location.host);
 const WORLD = { width: 1600, height: 900 };
 
 class ApiError extends Error {
@@ -108,6 +108,8 @@ function App() {
   const moveRef = useRef({ x: 0, y: 0 });
   const aimRef = useRef({ x: 800, y: 450 });
   const selfIdRef = useRef(null);
+  const snapshotRef = useRef(snapshot);
+  useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
   const roomRef = useRef(null);
   const lastInputRef = useRef(0);
 
@@ -177,12 +179,12 @@ function App() {
       x += moveRef.current.x; y += moveRef.current.y;
       const length = Math.hypot(x,y);
       if (length > 1) { x /= length; y /= length; }
-      const self = snapshot?.players?.find((player) => player.isSelf);
+      const self = snapshotRef.current?.players?.find((player) => player.isSelf);
       const aim = { x: aimRef.current.x - (self?.x ?? 800), y: aimRef.current.y - (self?.y ?? 450) };
       room.send("input", { x, y, aimX: aim.x, aimY: aim.y, fire: fireRef.current });
     }, 50);
     return () => window.clearInterval(timer);
-  }, [room, snapshot]);
+  }, [room]);
 
   useEffect(() => () => { roomRef.current?.leave(); }, []);
 
@@ -192,7 +194,7 @@ function App() {
     try {
       const client = new Client(REALTIME_URL);
       client.auth.token = session.token;
-      const joined = await client.joinOrCreate("arena", { mode });
+      const joined = await client.joinOrCreate("arena", { mode, token: session.token });
       roomRef.current = joined;
       setRoom(joined);
       joined.onMessage("welcome", (data) => { selfIdRef.current = data.playerId; });
@@ -281,7 +283,7 @@ function App() {
         <div className="mode-grid"><button className={"mode-card team-mode " + (mode === "team" ? "mode-selected" : "")} onClick={() => setMode("team")}><div className="mode-art team-art"><span>2</span><i>VS</i><span>2</span></div><div className="mode-card-copy"><div><h3>Team Battle</h3><p>Fight as a squad. Every elimination counts.</p></div><span className="mode-count">2 TEAMS</span></div><div className="mode-bottom"><span>RED vs BLUE</span><b>{mode === "team" ? "SELECTED ✓" : "SELECT MODE →"}</b></div></button><button className={"mode-card ffa-mode " + (mode === "free-for-all" ? "mode-selected" : "")} onClick={() => setMode("free-for-all")}><div className="mode-art ffa-art"><span>✦</span><span>✧</span><span>✦</span><span>✧</span></div><div className="mode-card-copy"><div><h3>Free-for-all</h3><p>No allies. No excuses. Be the last one standing.</p></div><span className="mode-count">EVERYONE</span></div><div className="mode-bottom"><span>SOLO COMBAT</span><b>{mode === "free-for-all" ? "SELECTED ✓" : "SELECT MODE →"}</b></div></button></div>
         <div className="queue-row"><div><b>Up for the challenge?</b><small>Controls: WASD / arrows · Aim with pointer · Hold to fire</small></div><button className="button primary queue-button" onClick={() => void startMatch()} disabled={connecting || inArena}>{connecting ? <><span className="spinner" /> Finding match…</> : <>⚔ &nbsp; Enter Arena <span>→</span></>}</button></div>
       </div>}
-      {view === "arena" && <div className="arena-page"><div className="arena-heading"><div><p className="eyebrow">LIVE COMBAT · {mode === "team" ? "RED VS BLUE" : "FREE-FOR-ALL"}</p><h1>Battle in progress</h1></div><button className="button ghost" onClick={() => void leaveMatch()}>Leave match</button></div><div className="arena-hud"><div><small>TIME LEFT</small><b>{Math.ceil((snapshot?.remainingMs ?? 180000)/1000)}s</b></div>{mode === "team" ? <div className="team-score"><b className="red-score">RED {snapshot?.scores?.red ?? 0}</b><span>—</span><b className="blue-score">BLUE {snapshot?.scores?.blue ?? 0}</b></div> : <div><small>PLAYERS</small><b>{snapshot?.players?.length ?? 1}</b></div>}<div><small>YOUR ELIMS</small><b>{snapshot?.players?.find((p) => p.isSelf)?.kills ?? 0}</b></div></div><div className="arena-frame"><ArenaCanvas snapshot={snapshot} fireRef={fireRef} moveRef={moveRef} aimRef={aimRef} /></div><div className="arena-controls"><span>W A S D <small>MOVE</small></span><span>POINTER <small>AIM</small></span><span>HOLD CLICK <small>FIRE</small></span><button onClick={() => void leaveMatch()}>Exit match</button></div></div>}
+      {view === "arena" && <div className="arena-page"><div className="arena-heading"><div><p className="eyebrow">LIVE COMBAT · {mode === "team" ? "RED VS BLUE" : "FREE-FOR-ALL"}</p><h1>Battle in progress</h1></div><button className="button ghost" onClick={() => void leaveMatch()}>Leave match</button></div><div className="arena-hud"><div><small>TIME LEFT</small><b>{Math.ceil((snapshot?.remainingMs ?? 180000)/1000)}s</b></div>{mode === "team" ? <div className="team-score"><b className="red-score">RED {snapshot?.scores?.red ?? 0}</b><span>—</span><b className="blue-score">BLUE {snapshot?.scores?.blue ?? 0}</b></div> : <div><small>PLAYERS</small><b>{snapshot?.players?.length ?? 1}</b></div>}<div><small>YOUR ELIMS</small><b>{snapshot?.players?.find((p) => p.isSelf)?.kills ?? 0}</b></div></div><div className="arena-frame"><ArenaCanvas snapshot={snapshot} fireRef={fireRef} moveRef={moveRef} aimRef={aimRef} /></div><div className="mobile-pad" aria-label="Touch movement controls"><div className="pad-cross"><button onPointerDown={(e) => { e.preventDefault(); moveRef.current.y = -1; }} onPointerUp={() => { moveRef.current.y = 0; }} onPointerCancel={() => { moveRef.current.y = 0; }} onPointerLeave={() => { moveRef.current.y = 0; }}>▲</button><div><button onPointerDown={(e) => { e.preventDefault(); moveRef.current.x = -1; }} onPointerUp={() => { moveRef.current.x = 0; }} onPointerCancel={() => { moveRef.current.x = 0; }} onPointerLeave={() => { moveRef.current.x = 0; }}>◀</button><button onPointerDown={(e) => { e.preventDefault(); moveRef.current.y = 1; }} onPointerUp={() => { moveRef.current.y = 0; }} onPointerCancel={() => { moveRef.current.y = 0; }} onPointerLeave={() => { moveRef.current.y = 0; }}>▼</button><button onPointerDown={(e) => { e.preventDefault(); moveRef.current.x = 1; }} onPointerUp={() => { moveRef.current.x = 0; }} onPointerCancel={() => { moveRef.current.x = 0; }} onPointerLeave={() => { moveRef.current.x = 0; }}>▶</button></div></div><button className="touch-fire" onPointerDown={(e) => { e.preventDefault(); fireRef.current = true; }} onPointerUp={() => { fireRef.current = false; }} onPointerCancel={() => { fireRef.current = false; }} onPointerLeave={() => { fireRef.current = false; }}>FIRE</button></div><div className="arena-controls"><span>W A S D <small>MOVE</small></span><span>POINTER <small>AIM</small></span><span>HOLD CLICK <small>FIRE</small></span><button onClick={() => void leaveMatch()}>Exit match</button></div></div>}
       {view === "results" && <div className="page-wrap result-page"><div className="result-card"><Icon>✦</Icon><p className="eyebrow">MATCH REPORT</p><h1>Battle <span>complete.</span></h1><p>{matchMessage || "Your match results have been recorded."}</p><div className="result-stats"><div><b>{profile?.xp || 0}</b><small>TOTAL XP</small></div><div><b>{profile?.coins || 0}</b><small>COINS SAVED</small></div><div><b>{profile?.level || 1}</b><small>LEVEL</small></div></div><button className="button primary" onClick={() => { setView("play"); setMatchMessage(""); setStatus(""); }}>Back to lobby →</button></div></div>}
       {view === "shop" && <div className="page-wrap"><div className="page-title"><div><p className="eyebrow">SPEND YOUR EARNINGS</p><h1>Item <span>shop</span></h1><p>Every purchase is verified and saved on the game server.</p></div><div className="coin-large">◈ {profile?.coins ?? 0} <small>COINS</small></div></div><div className="item-grid">{catalog.filter((item) => !item.isStarter && item.price > 0).map((item) => <ItemCard key={item.slug} item={item} owned={owned.has(item.slug)} level={profile?.level || 1} loading={loading} onBuy={() => void buyItem(item)} onEquip={() => void equipItem(item)} />)}</div></div>}
       {view === "armory" && <div className="page-wrap"><div className="page-title"><div><p className="eyebrow">YOUR LOADOUT</p><h1>The <span>armory</span></h1><p>Equip weapons and operators you've unlocked.</p></div></div><div className="section-heading"><div><p className="eyebrow">OPERATORS</p><h2>Characters</h2></div></div><div className="item-grid">{characters.map((item) => <ItemCard key={item.slug} item={item} owned={owned.has(item.slug)} equipped={profile?.selectedCharacterId === item.slug} level={profile?.level || 1} loading={loading} onBuy={() => void buyItem(item)} onEquip={() => void equipItem(item)} />)}</div><div className="section-heading"><div><p className="eyebrow">WEAPON SYSTEMS</p><h2>Weapons</h2></div></div><div className="item-grid">{weapons.map((item) => <ItemCard key={item.slug} item={item} owned={owned.has(item.slug)} equipped={profile?.selectedWeaponId === item.slug} level={profile?.level || 1} loading={loading} onBuy={() => void buyItem(item)} onEquip={() => void equipItem(item)} />)}</div></div>}
