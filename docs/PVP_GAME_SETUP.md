@@ -46,7 +46,7 @@ The new migration adds game profiles, the item catalog, inventory, match records
 - Fire: hold the mouse button or the mobile FIRE control.
 - Team Battle: red versus blue; same-team shots do not cause damage.
 - Free-for-all: every player is an opponent.
-- Matches run for three minutes. The initial rules award 100 XP and 25 coins for participating, 20 XP and 5 coins per elimination, plus 50 XP and 25 coins for a win. These values are server-side and can be tuned.
+- Matches run for three minutes. Players must participate for at least 60 seconds to receive the base completion reward of 100 XP and 25 coins. Each elimination adds 20 XP and 5 coins, and a win adds 50 XP and 25 coins. These values are server-side and can be tuned.
 
 ## Discord Activity configuration
 
