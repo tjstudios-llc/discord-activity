@@ -6,9 +6,11 @@ const catalog = [
   { slug: "rookie", name: "Rookie", type: "CHARACTER", description: "Your first arena operator.", price: 0, unlockLevel: 1, rarity: "common", isStarter: true, stats: { speed: 1, health: 100, color: "#62e6c5" } },
   { slug: "vanguard", name: "Vanguard", type: "CHARACTER", description: "A sturdy frontline specialist.", price: 450, unlockLevel: 1, rarity: "rare", isStarter: false, stats: { speed: 0.92, health: 125, color: "#78a8ff" } },
   { slug: "phantom", name: "Phantom", type: "CHARACTER", description: "A fast, elusive arena runner.", price: 700, unlockLevel: 5, rarity: "epic", isStarter: false, stats: { speed: 1.12, health: 90, color: "#c08cff" } },
+  { slug: "scout", name: "Scout", type: "CHARACTER", description: "A level-five operator reward with a nimble profile.", price: 0, unlockLevel: 5, rarity: "rare", isStarter: false, stats: { speed: 1.08, health: 95, color: "#ffd166" } },
   { slug: "blaster", name: "Pulse Blaster", type: "WEAPON", description: "Reliable starter weapon with balanced fire rate.", price: 0, unlockLevel: 1, rarity: "common", isStarter: true, stats: { damage: 25, cooldown: 0.32, speed: 540 } },
   { slug: "rapid-fire", name: "Rapid Fire", type: "WEAPON", description: "Faster shots with lighter damage.", price: 500, unlockLevel: 1, rarity: "rare", isStarter: false, stats: { damage: 14, cooldown: 0.16, speed: 620 } },
   { slug: "heavy-pulse", name: "Heavy Pulse", type: "WEAPON", description: "Slow, powerful shots for precise players.", price: 800, unlockLevel: 3, rarity: "epic", isStarter: false, stats: { damage: 45, cooldown: 0.7, speed: 460 } },
+  { slug: "arc-pistol", name: "Arc Pistol", type: "WEAPON", description: "A level-three reward with a snappy, balanced burst.", price: 0, unlockLevel: 3, rarity: "rare", isStarter: false, stats: { damage: 22, cooldown: 0.25, speed: 580 } },
   { slug: "neon-trail", name: "Neon Trail", type: "SKIN", description: "A bright cosmetic trail for your shots.", price: 250, unlockLevel: 1, rarity: "uncommon", isStarter: false, stats: { trail: "#ff72c6" } },
   { slug: "golden-core", name: "Golden Core", type: "SKIN", description: "A gold finish for your arena gear.", price: 900, unlockLevel: 1, rarity: "legendary", isStarter: false, stats: { tint: "#ffd166" } },
 ];
@@ -76,7 +78,7 @@ async function gameProfilePayload(userId) {
   const inventory = await prisma.gameInventory.findMany({ where: { userId }, include: { item: true }, orderBy: { acquiredAt: "asc" } });
   return {
     profile: {
-      xp: profile.xp, level: profile.level, xpIntoLevel: profile.xp % 100,
+      xp: profile.xp, level: profile.level, xpIntoLevel: Math.max(0, profile.xp - ((profile.level - 1) * profile.level * 50)),
       xpForNextLevel: profile.level * 100, coins: profile.coins,
       kills: profile.kills, deaths: profile.deaths, wins: profile.wins, losses: profile.losses,
       selectedCharacterId: profile.selectedCharacterId, selectedWeaponId: profile.selectedWeaponId,
@@ -106,9 +108,9 @@ export default async function gameRoutes(app) {
   app.get("/api/v1/game/leaderboard", async (_request, reply) => {
     const profiles = await prisma.gameProfile.findMany({
       take: 10, orderBy: [{ wins: "desc" }, { kills: "desc" }, { xp: "desc" }],
-      include: { user: { select: { username: true, displayName: true, avatar: true } } },
+      include: { user: { select: { discordId: true, username: true, displayName: true, avatar: true } } },
     });
-    return { players: profiles.map(({ user, ...profile }) => ({ name: user.displayName || user.username, avatar: user.avatar, level: profile.level, xp: profile.xp, wins: profile.wins, kills: profile.kills })) };
+    return { players: profiles.map(({ user, ...profile }) => ({ name: user.displayName || user.username, discordId: user.discordId, avatar: user.avatar, level: profile.level, xp: profile.xp, wins: profile.wins, kills: profile.kills })) };
   });
 
   app.post("/api/v1/game/shop/purchase", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
