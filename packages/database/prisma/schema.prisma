@@ -15,23 +15,6 @@ enum TeamRole {
   VIEWER
 }
 
-enum GameItemType {
-  CHARACTER
-  WEAPON
-  SKIN
-}
-
-enum GameMode {
-  TEAM
-  FREE_FOR_ALL
-}
-
-enum GameMatchStatus {
-  WAITING
-  ACTIVE
-  COMPLETED
-}
-
 enum TaskStatus {
   TODO
   IN_PROGRESS
@@ -54,9 +37,6 @@ model User {
   notes         Note[]
   auditEvents   AuditEvent[]
   sessions      AuthSession[]
-  gameProfile   GameProfile?
-  gameInventory GameInventory[]
-  gameMatches   GameMatchPlayer[]
 }
 
 model Team {
@@ -206,83 +186,4 @@ model AuthSession {
 
   @@index([userId, expiresAt])
   @@index([expiresAt])
-}
-
-
-model GameProfile {
-  id                  String          @id @default(cuid())
-  userId              String          @unique
-  xp                  Int             @default(0)
-  level               Int             @default(1)
-  coins               Int             @default(150)
-  kills               Int             @default(0)
-  deaths              Int             @default(0)
-  wins                Int             @default(0)
-  losses              Int             @default(0)
-  selectedCharacterId String          @default("rookie")
-  selectedWeaponId    String          @default("blaster")
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
-  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([level, xp])
-  @@index([wins, kills])
-}
-
-model GameItem {
-  id          String          @id @default(cuid())
-  slug        String          @unique
-  name        String
-  type        GameItemType
-  description String
-  price       Int             @default(0)
-  unlockLevel Int             @default(1)
-  rarity      String          @default("common")
-  stats       Json
-  isStarter   Boolean         @default(false)
-  createdAt   DateTime        @default(now())
-  inventory   GameInventory[]
-
-  @@index([type, unlockLevel])
-}
-
-model GameInventory {
-  id          String   @id @default(cuid())
-  userId      String
-  itemId      String
-  acquiredAt  DateTime @default(now())
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  item        GameItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, itemId])
-  @@index([userId, acquiredAt])
-}
-
-model GameMatch {
-  id        String             @id @default(cuid())
-  mode      GameMode
-  status    GameMatchStatus    @default(WAITING)
-  startedAt DateTime           @default(now())
-  endedAt   DateTime?
-  players   GameMatchPlayer[]
-
-  @@index([mode, status, startedAt])
-}
-
-model GameMatchPlayer {
-  id         String    @id @default(cuid())
-  matchId    String
-  userId     String
-  team       String?
-  kills      Int       @default(0)
-  deaths     Int       @default(0)
-  placement  Int?
-  xpEarned   Int       @default(0)
-  coinsEarned Int      @default(0)
-  createdAt  DateTime  @default(now())
-  match      GameMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([matchId, userId])
-  @@index([userId, createdAt])
 }

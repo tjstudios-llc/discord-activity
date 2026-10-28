@@ -2,7 +2,7 @@
   "name": "teamspace-discord-activity",
   "version": "0.1.0",
   "private": true,
-  "description": "Top-down multiplayer PvP Discord Activity with persistent progression",
+  "description": "Customizable, self-hostable Discord Activity for teams and workspaces",
   "license": "MIT",
   "engines": {
     "node": ">=22"
