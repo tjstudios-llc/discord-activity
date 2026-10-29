@@ -14,7 +14,8 @@
     "@discord/embedded-app-sdk": "^2.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "colyseus.js": "^0.16.22"
+    "colyseus.js": "^0.16.22",
+    "@teamspace/game-core": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.0.12",
