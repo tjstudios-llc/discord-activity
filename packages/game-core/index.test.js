@@ -35,8 +35,8 @@ test("high-speed movement does not tunnel through a thin wall", () => {
 test("bullet segment detects wall before target behind it", () => {
   const arena = getArena("foundry");
   const wall = arena.walls[0];
-  const wallT = segmentRectHit(200, 210, 450, 210, wall, 4);
-  const targetT = segmentCircleHit(200, 210, 450, 210, 500, 210, 22);
+  const wallT = segmentRectHit(200, 210, 600, 210, wall, 4);
+  const targetT = segmentCircleHit(200, 210, 600, 210, 500, 210, 22);
   assert.notEqual(wallT, null);
   assert.notEqual(targetT, null);
   assert.ok(wallT < targetT);
