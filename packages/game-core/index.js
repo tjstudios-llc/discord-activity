@@ -98,9 +98,15 @@ export function segmentRectHit(x1, y1, x2, y2, rect, padding = 0) {
 export function segmentCircleHit(x1, y1, x2, y2, cx, cy, radius) {
   const dx = x2 - x1;
   const dy = y2 - y1;
-  const lengthSquared = dx * dx + dy * dy;
-  const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((cx - x1) * dx + (cy - y1) * dy) / lengthSquared));
-  const px = x1 + t * dx;
-  const py = y1 + t * dy;
-  return (cx - px) ** 2 + (cy - py) ** 2 <= radius * radius ? t : null;
+  const fx = x1 - cx;
+  const fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  const c = fx * fx + fy * fy - radius * radius;
+  if (c <= 0) return 0;
+  if (a === 0) return null;
+  const b = 2 * (fx * dx + fy * dy);
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) return null;
+  const t = (-b - Math.sqrt(discriminant)) / (2 * a);
+  return t >= 0 && t <= 1 ? t : null;
 }
