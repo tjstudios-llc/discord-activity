@@ -1,0 +1,19 @@
+{
+  "name": "@teamspace/game-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "build": "node --check index.js",
+    "lint": "eslint .",
+    "typecheck": "node --check index.js"
+  },
+  "devDependencies": {
+    "eslint": "^9.24.0"
+  }
+}
