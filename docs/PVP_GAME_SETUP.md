@@ -1,6 +1,6 @@
-# TeamSpace Arena — PvP development setup
+# Mech Arena — PvP development setup
 
-TeamSpace Arena replaces the previous TeamSpace workspace dashboard with a top-down 2D PvP shooter. It supports team battles and free-for-all, Discord Embedded App authentication, server-authoritative combat, and PostgreSQL-backed progression.
+Mech Arena is a top-down 2D PvP mech shooter. It supports team battles and free-for-all, Discord Embedded App authentication, server-authoritative combat, and PostgreSQL-backed progression.
 
 ## Services and ports
 
@@ -24,8 +24,11 @@ After dependencies are installed and PostgreSQL is running:
 ```sh
 pnpm db:generate
 pnpm db:deploy
+pnpm --filter @teamspace/game-core test
 pnpm dev
 ```
+
+The shared `@teamspace/game-core` package defines four maps (Foundry, Desert Outpost, Neon Grid, and Arctic Base), wall geometry, player movement collision, and swept projectile collision. The realtime server and canvas renderer consume the same map definitions. The realtime server resolves player movement against solid walls and checks each projectile segment against walls and players, so a wall blocks shots at or before the first player intersection. Map selection is part of the Colyseus room filter, ensuring players join rooms with the same mode and map.
 
 The new migration adds game profiles, the item catalog, inventory, match records, and per-player match results. The API seeds catalog definitions into the database when a profile or catalog is requested. Each player starts with a Rookie character, Pulse Blaster, and 150 coins. The level curve requires 100 XP for level 2, 200 additional XP for level 3, and continues increasing by 100 XP per level.
 
@@ -58,6 +61,10 @@ Use the Discord Developer Portal's Activity URL mapping for the frontend host. K
 - Open the Activity inside Discord and verify sign-in, profile load, and catalog load.
 - Start one team match and one free-for-all match with at least two signed-in users.
 - Verify movement, firing, damage, team damage prevention, respawn, and match end.
+- Select each of the four maps and verify all clients in a room see the same map.
+- Walk directly into walls and along corners; the server should block passage while allowing wall sliding.
+- Fire through and around cover; projectiles should stop at the first wall and not damage players behind it.
+- Run `pnpm --filter @teamspace/game-core test` to validate map geometry and collision helper behavior.
 - Verify XP, coins, kills, deaths, wins/losses, unlocks, and inventory after refreshing/reconnecting.
 - Try purchasing the same item twice and buying with insufficient coins; both must be rejected by the API.
 - Verify an expired/revoked session cannot join the Colyseus room.

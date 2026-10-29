@@ -38,6 +38,8 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+      - name: Test map and collision helpers
+        run: pnpm test
       - name: Validate Prisma schema
         run: pnpm db:validate
       - name: Apply database migrations

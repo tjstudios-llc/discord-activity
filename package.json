@@ -20,7 +20,8 @@
     "db:validate": "pnpm --filter @teamspace/database db:validate",
     "db:migrate": "pnpm --filter @teamspace/database db:migrate",
     "dev:dashboard": "pnpm --filter @teamspace/dashboard dev",
-    "db:deploy": "pnpm --filter @teamspace/database db:deploy"
+    "db:deploy": "pnpm --filter @teamspace/database db:deploy",
+    "test": "pnpm --filter @teamspace/game-core test"
   },
   "devDependencies": {
     "prettier": "^3.5.3",

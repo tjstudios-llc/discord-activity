@@ -1,13 +1,31 @@
 import { createHash } from "node:crypto";
 import { Room, Server } from "colyseus";
 import { prisma } from "@teamspace/database";
+import { ARENA_SIZE, PLAYER_RADIUS, BULLET_RADIUS, getArena, resolvePlayerMove, circleIntersectsRect, segmentRectHit, segmentCircleHit } from "@teamspace/game-core";
 
 const port = Number.parseInt(process.env.REALTIME_PORT ?? "2567", 10);
 const MATCH_DURATION_MS = 180_000;
-const ARENA = { width: 1600, height: 900 };
+const ARENA = ARENA_SIZE;
 const TICK_MS = 50;
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("REALTIME_PORT must be a valid TCP port");
 const hashToken = (token) => createHash("sha256").update(token).digest("hex");
+function chooseSpawn(mapId, team, players) {
+  const arena = getArena(mapId);
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const x = team === "red" ? 90 + Math.random() * 520 : team === "blue" ? 990 + Math.random() * 520 : 70 + Math.random() * 1460;
+    const y = 70 + Math.random() * 760;
+    if (arena.walls.some((obstacle) => circleIntersectsRect(x, y, PLAYER_RADIUS, obstacle))) continue;
+    if (players.some((player) => player.health > 0 && Math.hypot(player.x - x, player.y - y) < PLAYER_RADIUS * 2.5)) continue;
+    return { x, y };
+  }
+  for (let y = 60; y < ARENA.height - 60; y += 55) {
+    for (let x = 60; x < ARENA.width - 60; x += 55) {
+      if (!arena.walls.some((obstacle) => circleIntersectsRect(x, y, PLAYER_RADIUS, obstacle)) &&
+          !players.some((player) => player.health > 0 && Math.hypot(player.x - x, player.y - y) < PLAYER_RADIUS * 2.5)) return { x, y };
+    }
+  }
+  return { x: team === "red" ? 90 : ARENA.width - 90, y: ARENA.height / 2 };
+}
 function levelForXp(xp) { let level = 1; let remaining = Math.max(0, xp); while (remaining >= level * 100) { remaining -= level * 100; level += 1; } return level; }
 
 class ArenaRoom extends Room {
@@ -20,9 +38,10 @@ class ArenaRoom extends Room {
   }
   async onCreate(options = {}) {
     this.mode = options.mode === "team" ? "TEAM" : "FREE_FOR_ALL";
+    this.mapId = getArena(options.mapId).id;
     this.players = new Map(); this.bullets = []; this.startedAt = Date.now(); this.ended = false;
     this.matchRecord = await prisma.gameMatch.create({ data: { mode: this.mode, status: "ACTIVE" } });
-    this.setMetadata({ mode: this.mode.toLowerCase(), title: this.mode === "TEAM" ? "Team Battle" : "Free-for-all" });
+    this.setMetadata({ mode: this.mode.toLowerCase(), mapId: this.mapId, mapName: getArena(this.mapId).name, title: this.mode === "TEAM" ? "Team Battle" : "Free-for-all" });
     this.maxClients = 8;
     this.onMessage("input", (client, payload) => this.applyInput(client, payload));
     this.onMessage("leave-match", (client) => client.leave());
@@ -45,8 +64,10 @@ class ArenaRoom extends Room {
     const character = await prisma.gameItem.findUnique({ where: { slug: profile.selectedCharacterId } });
     const weapon = await prisma.gameItem.findUnique({ where: { slug: profile.selectedWeaponId } });
     const index = this.players.size;
-    this.players.set(client.sessionId, { sessionId: client.sessionId, userId, joinedAt: Date.now(), name: user?.displayName || user?.username || ("Player " + (index + 1)), x: this.mode === "TEAM" ? (index % 2 ? 1320 : 280) : 200 + Math.random() * 1200, y: 150 + Math.random() * 600, aimX: 1, aimY: 0, health: Number(character?.stats?.health) || 100, maxHealth: Number(character?.stats?.health) || 100, speed: Number(character?.stats?.speed) * 180 || 180, color: character?.stats?.color || (index % 2 ? "#ff718b" : "#62e6c5"), weapon: { damage: Number(weapon?.stats?.damage) || 25, cooldown: Number(weapon?.stats?.cooldown) || 0.32, speed: Number(weapon?.stats?.speed) || 540 }, team: this.mode === "TEAM" ? (index % 2 ? "blue" : "red") : null, kills: 0, deaths: 0, lastShot: 0, respawnAt: 0, input: { x: 0, y: 0, fire: false } });
-    client.send("welcome", { matchId: this.matchRecord.id, mode: this.mode.toLowerCase(), playerId: client.sessionId, arena: ARENA, durationMs: MATCH_DURATION_MS });
+    const team = this.mode === "TEAM" ? (index % 2 ? "blue" : "red") : null;
+    const spawn = chooseSpawn(this.mapId, team, [...this.players.values()]);
+    this.players.set(client.sessionId, { sessionId: client.sessionId, userId, joinedAt: Date.now(), name: user?.displayName || user?.username || ("Player " + (index + 1)), x: spawn.x, y: spawn.y, aimX: 1, aimY: 0, health: Number(character?.stats?.health) || 100, maxHealth: Number(character?.stats?.health) || 100, speed: Number(character?.stats?.speed) * 180 || 180, color: character?.stats?.color || (index % 2 ? "#ff718b" : "#62e6c5"), weapon: { damage: Number(weapon?.stats?.damage) || 25, cooldown: Number(weapon?.stats?.cooldown) || 0.32, speed: Number(weapon?.stats?.speed) || 540 }, team, kills: 0, deaths: 0, lastShot: 0, respawnAt: 0, input: { x: 0, y: 0, fire: false } });
+    client.send("welcome", { matchId: this.matchRecord.id, mode: this.mode.toLowerCase(), mapId: this.mapId, mapName: getArena(this.mapId).name, playerId: client.sessionId, arena: ARENA, durationMs: MATCH_DURATION_MS });
   }
   applyInput(client, payload) {
     const player = this.players.get(client.sessionId); if (!player || this.ended || !payload || typeof payload !== "object") return;
@@ -58,26 +79,54 @@ class ArenaRoom extends Room {
   simulate() {
     if (this.ended) return; const now = Date.now(), dt = TICK_MS / 1000;
     for (const player of this.players.values()) {
-      if (player.health <= 0) { if (now >= player.respawnAt) { player.health = player.maxHealth; player.x = 150 + Math.random() * (ARENA.width - 300); player.y = 120 + Math.random() * (ARENA.height - 240); } continue; }
+      if (player.health <= 0) { if (now >= player.respawnAt) { player.health = player.maxHealth; const spawn = chooseSpawn(this.mapId, player.team, [...this.players.values()].filter((other) => other.sessionId !== player.sessionId)); player.x = spawn.x; player.y = spawn.y; } continue; }
       const length = Math.hypot(player.input.x, player.input.y) || 1;
-      player.x = Math.max(30, Math.min(ARENA.width - 30, player.x + player.input.x / length * player.speed * dt));
-      player.y = Math.max(30, Math.min(ARENA.height - 30, player.y + player.input.y / length * player.speed * dt));
+      const movement = resolvePlayerMove(player.x, player.y, player.input.x / length * player.speed * dt, player.input.y / length * player.speed * dt, this.mapId, PLAYER_RADIUS);
+      player.x = movement.x;
+      player.y = movement.y;
       if (player.input.fire && now - player.lastShot >= player.weapon.cooldown * 1000) { player.lastShot = now; this.bullets.push({ id: player.sessionId + "-" + now, owner: player.sessionId, x: player.x + player.aimX * 24, y: player.y + player.aimY * 24, vx: player.aimX * player.weapon.speed, vy: player.aimY * player.weapon.speed, damage: player.weapon.damage, ttl: 1.4 }); }
     }
     const remaining = [];
+    const walls = getArena(this.mapId).walls;
     for (const bullet of this.bullets) {
-      bullet.x += bullet.vx * dt; bullet.y += bullet.vy * dt; bullet.ttl -= dt;
-      if (bullet.ttl <= 0 || bullet.x < 0 || bullet.y < 0 || bullet.x > ARENA.width || bullet.y > ARENA.height) continue;
-      let hit = false;
+      const startX = bullet.x, startY = bullet.y;
+      const endX = startX + bullet.vx * dt, endY = startY + bullet.vy * dt;
+      bullet.ttl -= dt;
+      if (bullet.ttl <= 0 || endX < 0 || endY < 0 || endX > ARENA.width || endY > ARENA.height) continue;
+
+      let nearestWallT = null;
+      for (const obstacle of walls) {
+        const t = segmentRectHit(startX, startY, endX, endY, obstacle, BULLET_RADIUS);
+        if (t !== null && (nearestWallT === null || t < nearestWallT)) nearestWallT = t;
+      }
+
+      let nearestTarget = null;
+      let nearestTargetT = Infinity;
       for (const target of this.players.values()) {
         if (target.sessionId === bullet.owner || target.health <= 0) continue;
-        const shooter = this.players.get(bullet.owner); if (this.mode === "TEAM" && shooter?.team && shooter.team === target.team) continue;
-        if (Math.hypot(target.x - bullet.x, target.y - bullet.y) < 22) { target.health = Math.max(0, target.health - bullet.damage); if (target.health === 0) { target.deaths += 1; target.respawnAt = now + 1300; if (shooter) shooter.kills += 1; } hit = true; break; }
+        const shooter = this.players.get(bullet.owner);
+        if (this.mode === "TEAM" && shooter?.team && shooter.team === target.team) continue;
+        const t = segmentCircleHit(startX, startY, endX, endY, target.x, target.y, PLAYER_RADIUS + BULLET_RADIUS);
+        if (t !== null && t < nearestTargetT) { nearestTarget = target; nearestTargetT = t; }
       }
-      if (!hit) remaining.push(bullet);
+
+      // Solid cover wins when it is at or before the first player intersection.
+      if (nearestWallT !== null && (nearestTarget === null || nearestWallT <= nearestTargetT)) continue;
+      if (nearestTarget) {
+        const shooter = this.players.get(bullet.owner);
+        nearestTarget.health = Math.max(0, nearestTarget.health - bullet.damage);
+        if (nearestTarget.health === 0) {
+          nearestTarget.deaths += 1;
+          nearestTarget.respawnAt = now + 1300;
+          if (shooter) shooter.kills += 1;
+        }
+        continue;
+      }
+      bullet.x = endX; bullet.y = endY;
+      remaining.push(bullet);
     }
     this.bullets = remaining;
-    const snapshot = { mode: this.mode.toLowerCase(), elapsedMs: now - this.startedAt, remainingMs: Math.max(0, MATCH_DURATION_MS - (now - this.startedAt)), players: [...this.players.values()].map(({ sessionId, name, x, y, aimX, aimY, health, maxHealth, color, team, kills, deaths }) => ({ id: sessionId, name, x, y, aimX, aimY, health, maxHealth, color, team, kills, deaths, isSelf: false })), bullets: this.bullets.map(({ id, owner, x, y }) => ({ id, owner, x, y })), scores: this.scoreboard() };
+    const snapshot = { mode: this.mode.toLowerCase(), mapId: this.mapId, mapName: getArena(this.mapId).name, elapsedMs: now - this.startedAt, remainingMs: Math.max(0, MATCH_DURATION_MS - (now - this.startedAt)), players: [...this.players.values()].map(({ sessionId, name, x, y, aimX, aimY, health, maxHealth, color, team, kills, deaths }) => ({ id: sessionId, name, x, y, aimX, aimY, health, maxHealth, color, team, kills, deaths, isSelf: false })), bullets: this.bullets.map(({ id, owner, x, y }) => ({ id, owner, x, y })), scores: this.scoreboard() };
     for (const client of this.clients) client.send("snapshot", { ...snapshot, players: snapshot.players.map((player) => ({ ...player, isSelf: player.id === client.sessionId })) });
   }
   scoreboard() { const scores = { red: 0, blue: 0 }; if (this.mode === "TEAM") for (const player of this.players.values()) if (player.team) scores[player.team] += player.kills; return scores; }
@@ -107,7 +156,7 @@ class ArenaRoom extends Room {
   async onDispose() { clearInterval(this.tick); clearTimeout(this.endTimer); if (!this.ended && this.matchRecord) await prisma.gameMatch.updateMany({ where: { id: this.matchRecord.id, status: "ACTIVE" }, data: { status: "COMPLETED", endedAt: new Date() } }); }
 }
 const server = new Server();
-server.define("arena", ArenaRoom).filterBy(["mode"]);
+server.define("arena", ArenaRoom).filterBy(["mode", "mapId"]);
 server.onShutdown(async () => { console.info("PvP realtime service stopping"); await prisma.$disconnect(); });
 await server.listen(port);
 console.info("PvP realtime service listening on port " + port);

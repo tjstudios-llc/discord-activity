@@ -13,7 +13,8 @@
   "dependencies": {
     "@colyseus/ws-transport": "^0.16.5",
     "colyseus": "^0.16.5",
-    "@teamspace/database": "workspace:*"
+    "@teamspace/database": "workspace:*",
+    "@teamspace/game-core": "workspace:*"
   },
   "devDependencies": {
     "eslint": "^9.24.0"
